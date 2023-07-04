@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -11,6 +15,8 @@ import (
 type apiConfig struct {
 	fileserverHits int
 }
+
+var gProfanity []string = []string{"kerfuffle", "sharbert", "fornax"}
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -44,9 +50,109 @@ func middlewareCors(next http.Handler) http.Handler {
 	})
 }
 
+func respondWithError(w http.ResponseWriter, code int, msg string) {
+	w.WriteHeader(code)
+	w.Write([]byte(msg))
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	dat, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Printf("Error marshalling JSON: %s", err)
+	}
+
+	w.WriteHeader(code)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(dat)
+}
+
+func handleValidateChirp(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		// why tf are we sending internal server error??
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+
+	type successMsg struct {
+		CleanedBody string `json:"cleaned_body"`
+	}
+
+	type failMsg struct {
+		Error string `json:"error"`
+	}
+
+	if len(params.Body) > 140 {
+		respBody := failMsg{
+			Error: "Chirp is too long",
+		}
+		respondWithJSON(w, http.StatusBadRequest, respBody)
+		return
+	}
+
+	filtered, err := profanityFilter(params.Body)
+	if err != nil {
+		respBody := failMsg{
+			Error: "Internal Server Error",
+		}
+		respondWithJSON(w, http.StatusInternalServerError, respBody)
+		return
+	}
+
+	// success response
+	respBody := successMsg{
+		CleanedBody: filtered,
+	}
+	respondWithJSON(w, http.StatusOK, respBody)
+}
+
+func profanityFilter(input string) (string, error) {
+	var err error
+	for _, word := range gProfanity {
+		input, err = caseInsensitiveReplace(strings.NewReader(input), word, "****")
+		if err != nil {
+			return input, err
+		}
+	}
+
+	return input, err
+}
+
+func caseInsensitiveReplace(input io.Reader, search, replace string) (string, error) {
+	out := strings.Builder{}
+	reader := bufio.NewReader(input)
+	var s string
+	var err error
+	for err == nil {
+		s, err = reader.ReadString(' ')
+
+		if strings.EqualFold(strings.TrimRight(s, " "), search) {
+			out.WriteString(replace)
+			if s[len(s)-1] == ' ' {
+				out.WriteByte(' ')
+			}
+		} else {
+			out.WriteString(s)
+		}
+	}
+
+	if err == io.EOF {
+		err = nil
+	}
+
+	return out.String(), err
+}
+
 func apiRouter() chi.Router {
 	router := chi.NewRouter()
 	router.Get("/healthz", handleReadinessCheck)
+	router.Post("/validate_chirp", handleValidateChirp)
 
 	return router
 }

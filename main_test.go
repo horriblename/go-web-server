@@ -1,8 +1,11 @@
 package main
 
 import (
-	"io"
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,41 +23,78 @@ func TestServer(t *testing.T) {
 
 	url = "http://" + url
 
-	var resp *http.Response
+	testGet(t, url+"/healthz", http.StatusOK)
+	testGet(t, url+"/app", http.StatusOK)
+	testGet(t, url+"/app/assets/logo.png", http.StatusOK)
+
+	// TODO check it returns 2
+	testGet(t, url+"/admin/metrics", http.StatusOK)
+
+	// test /api/validate_chirp
+	var req ValidateChirpRequest
+	req = ValidateChirpRequest{"Hello!"}
+	testValidateChirp(t, url, req, 200, ValidateChirpSuccess{req.Body})
+
+	req = ValidateChirpRequest{strings.Repeat(".", 141)}
+	testValidateChirp(t, url, req, 400, ValidateChirpFail{"Chirp is too long"})
+
+	req = ValidateChirpRequest{"This is a keRfUfFle opinion I need to share with the world!"}
+	testValidateChirp(t, url, req, 200, ValidateChirpSuccess{"This is a **** opinion I need to share with the world!"})
+}
+
+func testGet(t *testing.T, url string, code int) {
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Errorf(`Getting "%s": %s`, url, err)
+		return
+	}
+	if resp.StatusCode != code {
+		t.Errorf(`Getting "%s": got status %s, expected %d`, url, resp.Status, code)
+		return
+	}
+
+	resp.Body.Close()
+}
+
+type ValidateChirpRequest struct {
+	Body string `json:"body"`
+}
+type ValidateChirpSuccess struct {
+	CleanedBody string `json:"cleaned_body"`
+}
+type ValidateChirpFail struct {
+	Error string `json:"error"`
+}
+
+func testValidateChirp[T any](t *testing.T, base_url string, req ValidateChirpRequest, code int, expect T) {
+	var dat []byte
 	var err error
-	resp, err = http.Get(url + "/app")
+	dat, err = json.Marshal(req)
 	if err != nil {
-		t.Errorf(`Getting "/app": %s`, err)
+		panic("something went wrong")
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf(`Getting "/app": got status %s`, resp.Status)
-	}
-	resp.Body.Close()
+	resp, err := http.Post(base_url+"/api/validate_chirp", "application/json", bytes.NewReader(dat))
 
-	resp, err = http.Get(url + "/app/assets/logo.png")
 	if err != nil {
-		t.Errorf(`Getting "/app/assets/logo.png": %s`, err)
+		t.Errorf(`Posting /api/validate_chirp: %s`, err)
+		return
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf(`Getting "/app/assets/logo.png": got status %s`, resp.Status)
-	}
-	resp.Body.Close()
 
-	// Test metric middleware
-	resp, err = http.Get(url + "/admin/metrics")
+	if resp.StatusCode != code {
+		t.Errorf("Expected status code %d, got %d", code, resp.StatusCode)
+	}
+
+	got := expect
+
+	decoder := json.NewDecoder(resp.Body)
+	err = decoder.Decode(&got)
+
 	if err != nil {
-		t.Errorf(`Getting "/admin/metrics": %s`, err)
+		t.Errorf(`Decoding response: %s`, err)
+		return
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf(`Getting "/admin/metrics": got status %s`, resp.Status)
-	} else {
-		_, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Errorf(`Reading Response Body of "/admin/metrics": %s`, err)
-		}
-		// if string(buf) != "Hits: 2" {
-		// 	t.Errorf(`Expected 2 from "/admin/metrics", got %s`, string(buf))
-		// }
+
+	if !reflect.DeepEqual(got, expect) {
+		t.Errorf(`Expected %+v\nGot %+v`, expect, got)
 	}
-	resp.Body.Close()
 }
