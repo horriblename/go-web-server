@@ -19,12 +19,43 @@ func middlewareCors(next http.Handler) http.Handler {
 	})
 }
 
-func handleNotFound(w http.ResponseWriter, req *http.Request) {
-	http.NotFound(w, req)
+func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("charset", "utf-8")
+	w.Write([]byte("OK"))
 }
 
-func handleRoot(w http.ResponseWriter, req *http.Request) {
+type rootPath struct {
+	next http.Handler
+}
 
+func (h *rootPath) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	req.URL.Path = "/"
+	h.next.ServeHTTP(w, req)
+}
+
+func emptyPath(next http.Handler) http.Handler {
+	return &rootPath{
+		next: next,
+	}
+}
+
+func startServer(host string) error {
+	mux := http.NewServeMux()
+	// mux.HandleFunc("", handleNotFound)
+	fileServer := http.FileServer(http.Dir("."))
+	mux.Handle("/app/", http.StripPrefix("/app", fileServer))
+	mux.Handle("/app", emptyPath(fileServer))
+	mux.HandleFunc("/healthz", handleReadinessCheck)
+	corsMux := middlewareCors(mux)
+
+	server := http.Server{
+		Handler: corsMux,
+		Addr:    host,
+	}
+
+	return server.ListenAndServe()
 }
 
 func main() {
@@ -34,17 +65,7 @@ func main() {
 		host = args[1]
 	}
 
-	mux := http.NewServeMux()
-	// mux.HandleFunc("", handleNotFound)
-	mux.Handle("/", http.FileServer(http.Dir(".")))
-	corsMux := middlewareCors(mux)
-
-	server := http.Server{
-		Handler: corsMux,
-		Addr:    host,
-	}
-
-	err := server.ListenAndServe()
+	err := startServer(host)
 
 	if err != http.ErrServerClosed {
 		fmt.Printf("%s\n", err)
