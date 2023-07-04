@@ -41,19 +41,19 @@ func TestServer(t *testing.T) {
 	resp.Body.Close()
 
 	// Test metric middleware
-	resp, err = http.Get(url + "/metrics")
+	resp, err = http.Get(url + "/api/metrics")
 	if err != nil {
-		t.Errorf(`Getting "/metrics": %s`, err)
+		t.Errorf(`Getting "/api/metrics": %s`, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf(`Getting "/metrics": got status %s`, resp.Status)
+		t.Errorf(`Getting "/api/metrics": got status %s`, resp.Status)
 	} else {
 		buf, err := io.ReadAll(resp.Body)
 		if err != nil {
-			t.Errorf(`Reading Response Body of "/metrics": %s`, err)
+			t.Errorf(`Reading Response Body of "/api/metrics": %s`, err)
 		}
-		if string(buf) != "2" {
-			t.Errorf(`Expected 2 from "/metrics", got %s`, string(buf))
+		if string(buf) != "Hits: 2" {
+			t.Errorf(`Expected 2 from "/api/metrics", got %s`, string(buf))
 		}
 	}
 	resp.Body.Close()

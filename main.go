@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type apiConfig struct {
@@ -18,10 +20,8 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	})
 }
 
-func (cfg *apiConfig) MetricRequestHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Write([]byte("Hits: " + strconv.Itoa(cfg.fileserverHits)))
-	})
+func (cfg *apiConfig) HandleMetricRequest(w http.ResponseWriter, req *http.Request) {
+	w.Write([]byte("Hits: " + strconv.Itoa(cfg.fileserverHits)))
 }
 
 func middlewareCors(next http.Handler) http.Handler {
@@ -37,6 +37,14 @@ func middlewareCors(next http.Handler) http.Handler {
 	})
 }
 
+func apiRouter(cfg *apiConfig) chi.Router {
+	router := chi.NewRouter()
+	router.Get("/healthz", handleReadinessCheck)
+	router.Get("/metrics", cfg.HandleMetricRequest)
+
+	return router
+}
+
 func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "text/plain")
@@ -45,20 +53,21 @@ func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
 }
 
 func startServer(host string) error {
-	mux := http.NewServeMux()
-	// mux.HandleFunc("", handleNotFound)
+	router := chi.NewRouter()
+
 	apiCfg := apiConfig{}
 	fileServer := apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))
 
-	mux.Handle("/app/", http.StripPrefix("/app", fileServer))
-	mux.Handle("/app", emptyPath(fileServer))
-	mux.HandleFunc("/healthz", handleReadinessCheck)
-	mux.Handle("/metrics", apiCfg.MetricRequestHandler())
+	// if not using chi
+	// do `router = middlewareCors(router)` after defining all endpoints
+	router.Use(middlewareCors)
 
-	corsMux := middlewareCors(mux)
+	router.Get("/app/*", http.StripPrefix("/app", fileServer).ServeHTTP)
+	router.Get("/app", emptyPath(fileServer).ServeHTTP)
+	router.Mount("/api", apiRouter(&apiCfg))
 
 	server := http.Server{
-		Handler: corsMux,
+		Handler: router,
 		Addr:    host,
 	}
 
