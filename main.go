@@ -23,6 +23,10 @@ func handleNotFound(w http.ResponseWriter, req *http.Request) {
 	http.NotFound(w, req)
 }
 
+func handleRoot(w http.ResponseWriter, req *http.Request) {
+
+}
+
 func main() {
 	args := os.Args
 	var host string
@@ -31,7 +35,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleNotFound)
+	// mux.HandleFunc("", handleNotFound)
+	mux.Handle("/", http.FileServer(http.Dir(".")))
 	corsMux := middlewareCors(mux)
 
 	server := http.Server{
@@ -41,5 +46,8 @@ func main() {
 
 	err := server.ListenAndServe()
 
-	fmt.Printf("%s\n", err)
+	if err != http.ErrServerClosed {
+		fmt.Printf("%s\n", err)
+		os.Exit(1)
+	}
 }
