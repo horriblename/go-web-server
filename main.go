@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -21,7 +20,15 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func (cfg *apiConfig) HandleMetricRequest(w http.ResponseWriter, req *http.Request) {
-	w.Write([]byte("Hits: " + strconv.Itoa(cfg.fileserverHits)))
+	content := fmt.Sprintf(`<html>
+<body>
+	<h1>Welcome, Chirpy Admin</h1>
+	<p>Chirpy has been visited %d times!</p>
+</body>
+</html>`, cfg.fileserverHits)
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(content))
 }
 
 func middlewareCors(next http.Handler) http.Handler {
@@ -37,9 +44,16 @@ func middlewareCors(next http.Handler) http.Handler {
 	})
 }
 
-func apiRouter(cfg *apiConfig) chi.Router {
+func apiRouter() chi.Router {
 	router := chi.NewRouter()
 	router.Get("/healthz", handleReadinessCheck)
+
+	return router
+}
+
+func adminRouter(cfg *apiConfig) chi.Router {
+	router := chi.NewRouter()
+
 	router.Get("/metrics", cfg.HandleMetricRequest)
 
 	return router
@@ -64,7 +78,8 @@ func startServer(host string) error {
 
 	router.Get("/app/*", http.StripPrefix("/app", fileServer).ServeHTTP)
 	router.Get("/app", emptyPath(fileServer).ServeHTTP)
-	router.Mount("/api", apiRouter(&apiCfg))
+	router.Mount("/api", apiRouter())
+	router.Mount("/admin", adminRouter(&apiCfg))
 
 	server := http.Server{
 		Handler: router,
