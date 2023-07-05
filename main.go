@@ -2,18 +2,24 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	db "github.com/horriblename/go-web-server/db"
 )
+
+var gDatabasePath = "/tmp/database.json"
 
 type apiConfig struct {
 	fileserverHits int
+	db             *db.DB
 }
 
 var gProfanity []string = []string{"kerfuffle", "sharbert", "fornax"}
@@ -66,7 +72,7 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Write(dat)
 }
 
-func handleValidateChirp(w http.ResponseWriter, req *http.Request) {
+func (apiCfg apiConfig) handlePostChirp(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -78,10 +84,6 @@ func handleValidateChirp(w http.ResponseWriter, req *http.Request) {
 		// why tf are we sending internal server error??
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
 		return
-	}
-
-	type successMsg struct {
-		CleanedBody string `json:"cleaned_body"`
 	}
 
 	type failMsg struct {
@@ -106,10 +108,16 @@ func handleValidateChirp(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// success response
-	respBody := successMsg{
-		CleanedBody: filtered,
+	chirp, err := apiCfg.db.CreateChirp(filtered)
+	if err != nil {
+		respBody := failMsg{
+			Error: "Database Error",
+		}
+		respondWithJSON(w, http.StatusInternalServerError, respBody)
+		return
 	}
-	respondWithJSON(w, http.StatusOK, respBody)
+
+	respondWithJSON(w, 201, chirp)
 }
 
 func profanityFilter(input string) (string, error) {
@@ -149,10 +157,75 @@ func caseInsensitiveReplace(input io.Reader, search, replace string) (string, er
 	return out.String(), err
 }
 
-func apiRouter() chi.Router {
+func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) {
+	chirps, err := cfg.db.GetChirps()
+	if err != nil {
+		fmt.Printf("Getting chirps from DB: %s", err)
+		respBody := struct {
+			Error string `json:"error"`
+		}{
+			Error: "Database Error",
+		}
+		respondWithJSON(w, http.StatusInternalServerError, respBody)
+		return
+	}
+
+	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	encoder := json.NewEncoder(w)
+	encoder.Encode(chirps)
+}
+
+func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Request) {
+	chirpID := req.Context().Value("chirpID")
+
+	chirps, err := cfg.db.GetChirps()
+	if err != nil {
+		fmt.Printf("Getting chirps from DB: %s", err)
+		respBody := struct {
+			Error string `json:"error"`
+		}{
+			Error: "Database Error",
+		}
+		respondWithJSON(w, http.StatusInternalServerError, respBody)
+		return
+	}
+
+	// could be optimised but idc
+	for _, chirp := range chirps {
+		if chirp.Id == chirpID {
+			respondWithJSON(w, http.StatusOK, chirp)
+			return
+		}
+	}
+
+	respondWithError(w, http.StatusNotFound, "Chirp not found")
+}
+
+func chirpCtx(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		chirpIDStr := chi.URLParam(req, "chirpID")
+		chirpID, err := strconv.Atoi(chirpIDStr)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, "Expected an ID")
+			return
+		}
+
+		ctx := context.WithValue(req.Context(), "chirpID", chirpID)
+		next.ServeHTTP(w, req.WithContext(ctx))
+	})
+}
+
+func apiRouter(cfg *apiConfig) chi.Router {
 	router := chi.NewRouter()
 	router.Get("/healthz", handleReadinessCheck)
-	router.Post("/validate_chirp", handleValidateChirp)
+	// router.Post("/chirps", cfg.handlePostChirp)
+	// router.Get("/chirps", cfg.handleGetChirps)
+	router.Route("/chirps", func(r chi.Router) {
+		r.Get("/", cfg.handleGetChirps)
+		r.Post("/", cfg.handlePostChirp)
+		r.With(chirpCtx).Get("/{chirpID}", cfg.handleGetChirpByID)
+	})
 
 	return router
 }
@@ -175,7 +248,12 @@ func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
 func startServer(host string) error {
 	router := chi.NewRouter()
 
-	apiCfg := apiConfig{}
+	db, err := db.New(gDatabasePath)
+	if err != nil {
+		panic(fmt.Sprintf("Creating DB: %s", err))
+	}
+
+	apiCfg := apiConfig{db: db}
 	fileServer := apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))
 
 	// if not using chi
@@ -184,7 +262,7 @@ func startServer(host string) error {
 
 	router.Get("/app/*", http.StripPrefix("/app", fileServer).ServeHTTP)
 	router.Get("/app", emptyPath(fileServer).ServeHTTP)
-	router.Mount("/api", apiRouter())
+	router.Mount("/api", apiRouter(&apiCfg))
 	router.Mount("/admin", adminRouter(&apiCfg))
 
 	server := http.Server{
