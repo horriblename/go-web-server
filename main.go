@@ -168,10 +168,7 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	w.WriteHeader(200)
-	w.Header().Set("Content-Type", "application/json")
-	encoder := json.NewEncoder(w)
-	encoder.Encode(chirps)
+	respondWithJSON(w, http.StatusOK, chirps)
 }
 
 func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Request) {
@@ -200,6 +197,27 @@ func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Reques
 	respondWithError(w, http.StatusNotFound, "Chirp not found")
 }
 
+func (cfg *apiConfig) handlePostUsers(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+
+	user, err := cfg.db.CreateUser(params.Email)
+	if err != nil {
+		respondWithJSON(w, http.StatusInternalServerError, "Database Error")
+		return
+	}
+	respondWithJSON(w, 201, user)
+}
+
 func chirpCtx(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		chirpIDStr := chi.URLParam(req, "chirpID")
@@ -217,12 +235,13 @@ func chirpCtx(next http.Handler) http.Handler {
 func apiRouter(cfg *apiConfig) chi.Router {
 	router := chi.NewRouter()
 	router.Get("/healthz", handleReadinessCheck)
-	// router.Post("/chirps", cfg.handlePostChirp)
-	// router.Get("/chirps", cfg.handleGetChirps)
 	router.Route("/chirps", func(r chi.Router) {
 		r.Get("/", cfg.handleGetChirps)
 		r.Post("/", cfg.handlePostChirp)
 		r.With(chirpCtx).Get("/{chirpID}", cfg.handleGetChirpByID)
+	})
+	router.Route("/users", func(r chi.Router) {
+		r.Post("/", cfg.handlePostUsers)
 	})
 
 	return router

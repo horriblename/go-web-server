@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -40,49 +42,54 @@ func TestDB(t *testing.T) {
 		}
 	}
 
-	{
-		content := "first chirp!"
-		_, err := db.CreateChirp(content)
-		if err != nil {
-			t.Errorf("CreateChirp: %s", err)
-			return
-		}
-		chirps, err := db.GetChirps()
-		if err != nil {
-			t.Errorf("GetChirps: %s", err)
-			return
-		}
-		if len(chirps) != 1 {
-			t.Errorf(`Expected 1 chirps, got %+v`, chirps)
-			return
-		}
-		expect := Chirp{Id: 1, Body: content}
-		if chirps[0] != expect {
-			t.Errorf(`Expected chirp to be %+v\n got %+v`, expect, chirps[0])
-			return
-		}
-	}
+	testAddChirp(db, "first chirp!", 1)
+	testAddChirp(db, "second chirp", 2)
 
 	{
-		content := "second"
-		_, err := db.CreateChirp(content)
-		if err != nil {
-			t.Errorf("CreateChirp: %s", err)
-			return
-		}
-		chirps, err := db.GetChirps()
-		if err != nil {
-			t.Errorf("GetChirps: %s", err)
-			return
-		}
-		if len(chirps) != 2 {
-			t.Errorf(`Expected 2 chirps, got %d`, len(chirps))
-			return
-		}
-		expect := Chirp{Id: 2, Body: content}
-		if chirps[1] != expect {
-			t.Errorf(`Expected chirp to be %+v\n got %+v`, expect, chirps[0])
-			return
-		}
 	}
+}
+
+func testAddChirp(db *DB, content string, expectID int) error {
+	expect := Chirp{Id: expectID, Body: content}
+	createdChirp, err := db.CreateChirp(content)
+	if err != nil {
+		return err
+	}
+	if createdChirp != expect {
+		return errors.New(fmt.Sprintf(`Expected chirp to be %+v\n got %+v`, expect, createdChirp))
+	}
+	chirps, err := db.GetChirps()
+	if err != nil {
+		return err
+	}
+	if len(chirps) != expectID {
+		return errors.New(fmt.Sprintf(`Expected %d chirps, got %d`, expectID, len(chirps)))
+	}
+	got := chirps[expectID-1]
+	if got != expect {
+		return errors.New(fmt.Sprintf(`Expected chirp to be %+v\n got %+v`, expect, got))
+	}
+
+	return nil
+}
+
+func testAddUser(db *DB, email string, expectID int) error {
+	_, err := db.CreateUser(email)
+	if err != nil {
+		return errors.New(fmt.Sprintf("CreateUser: %s", err))
+	}
+	users, err := db.GetUsers()
+	if err != nil {
+		return errors.New(fmt.Sprintf("GetUsers: %s", err))
+	}
+	if len(users) != expectID {
+		return errors.New(fmt.Sprintf(`Expected 1 users, got %d`, len(users)))
+	}
+	expect := User{Id: expectID, Email: email}
+	got := users[expectID-1]
+	if got != expect {
+		return errors.New(fmt.Sprintf(`Expected user to be %+v\n got %+v`, expect, got))
+	}
+
+	return nil
 }

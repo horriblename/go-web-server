@@ -13,6 +13,11 @@ type Chirp struct {
 	Body string `json:"body"`
 }
 
+type User struct {
+	Id    int    `json:"id"`
+	Email string `json:"email"`
+}
+
 type DB struct {
 	path string
 	lock *sync.RWMutex
@@ -20,6 +25,7 @@ type DB struct {
 
 type DBStruct struct {
 	Chirps map[int]Chirp `json:"chirps"`
+	Users  map[int]User  `json:"users"`
 }
 
 var errIsDir error = errors.New("the provided database path is a directory")
@@ -29,6 +35,18 @@ var errIsDir error = errors.New("the provided database path is a directory")
 func New(path string) (*DB, error) {
 	db := DB{path: path, lock: &sync.RWMutex{}}
 	return &db, db.ensureDB()
+}
+
+func NewDBStruct(chirps []Chirp, users []User) DBStruct {
+	dbstruct := DBStruct{make(map[int]Chirp), make(map[int]User)}
+	for _, chirp := range chirps {
+		dbstruct.Chirps[chirp.Id] = chirp
+	}
+	for _, user := range users {
+		dbstruct.Users[user.Id] = user
+	}
+
+	return dbstruct
 }
 
 // creates database file if it doesn't exist
@@ -43,7 +61,7 @@ func (db *DB) ensureDB() error {
 		}
 		defer f.Close()
 
-		dbStruct := DBStruct{make(map[int]Chirp)}
+		dbStruct := DBStruct{make(map[int]Chirp), make(map[int]User)}
 		dat, err := json.Marshal(dbStruct)
 		if err != nil {
 			return err
@@ -76,6 +94,22 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	return chirps, nil
 }
 
+func (db *DB) GetUsers() ([]User, error) {
+	dbStruct, err := db.loadDB()
+
+	if err != nil {
+		return nil, err
+	}
+
+	users := []User{}
+	for _, user := range dbStruct.Users {
+		users = append(users, user)
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Id < users[j].Id })
+
+	return users, nil
+}
+
 // loadDB reads the database file into memory
 func (db *DB) loadDB() (DBStruct, error) {
 	db.lock.RLock()
@@ -99,30 +133,46 @@ func (db *DB) loadDB() (DBStruct, error) {
 func (db *DB) CreateChirp(body string) (Chirp, error) {
 	newChirp := Chirp{Body: body}
 
-	chirps, err := db.GetChirps()
+	dbstruct, err := db.loadDB()
 	if err != nil {
 		return newChirp, err
 	}
 
-	if len(chirps) > 0 {
-		newChirp.Id = chirps[len(chirps)-1].Id + 1
-	} else {
-		newChirp.Id = 1
+	maxID := 0
+	for id := range dbstruct.Chirps {
+		if id > maxID {
+			maxID = id
+		}
 	}
-	newChirp.Id = len(chirps) + 1
-	chirps = append(chirps, newChirp)
+	newChirp.Id = maxID + 1
+	dbstruct.Chirps[newChirp.Id] = newChirp
 
-	dbStruct := DBStruct{
-		Chirps: make(map[int]Chirp),
-	}
-	for _, chirp := range chirps {
-		dbStruct.Chirps[chirp.Id] = chirp
-	}
-	dbStruct.Chirps[newChirp.Id] = newChirp
-
-	err = db.writeDB(dbStruct)
+	err = db.writeDB(dbstruct)
 
 	return newChirp, err
+}
+
+func (db *DB) CreateUser(email string) (User, error) {
+	newUser := User{Email: email}
+
+	dbstruct, err := db.loadDB()
+	if err != nil {
+		return newUser, err
+	}
+
+	maxID := 0
+	for id := range dbstruct.Users {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	newUser.Id = maxID + 1
+	dbstruct.Users[newUser.Id] = newUser
+
+	err = db.writeDB(dbstruct)
+
+	return newUser, err
+
 }
 
 // writes the database file to disk
