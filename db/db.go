@@ -61,19 +61,8 @@ func (db *DB) ensureDB() error {
 
 // GetChirps returns all chirps in the database
 func (db *DB) GetChirps() ([]Chirp, error) {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	dbStruct, err := db.loadDB()
 
-	f, err := os.Open(db.path)
-	defer f.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	var dbStruct DBStruct
-
-	decoder := json.NewDecoder(f)
-	err = decoder.Decode(&dbStruct)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +74,26 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	sort.Slice(chirps, func(i, j int) bool { return chirps[i].Id < chirps[j].Id })
 
 	return chirps, nil
+}
+
+// loadDB reads the database file into memory
+func (db *DB) loadDB() (DBStruct, error) {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	var dbStruct DBStruct
+
+	f, err := os.Open(db.path)
+	defer f.Close()
+
+	if err != nil {
+		return dbStruct, err
+	}
+
+	decoder := json.NewDecoder(f)
+	err = decoder.Decode(&dbStruct)
+
+	return dbStruct, err
 }
 
 func (db *DB) CreateChirp(body string) (Chirp, error) {
