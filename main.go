@@ -22,6 +22,10 @@ type apiConfig struct {
 	db             *db.DB
 }
 
+type genericErrorMsg struct {
+	Error string `json:"error"`
+}
+
 var gProfanity []string = []string{"kerfuffle", "sharbert", "fornax"}
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -86,12 +90,8 @@ func (apiCfg apiConfig) handlePostChirp(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	type failMsg struct {
-		Error string `json:"error"`
-	}
-
 	if len(params.Body) > 140 {
-		respBody := failMsg{
+		respBody := genericErrorMsg{
 			Error: "Chirp is too long",
 		}
 		respondWithJSON(w, http.StatusBadRequest, respBody)
@@ -100,7 +100,7 @@ func (apiCfg apiConfig) handlePostChirp(w http.ResponseWriter, req *http.Request
 
 	filtered, err := profanityFilter(params.Body)
 	if err != nil {
-		respBody := failMsg{
+		respBody := genericErrorMsg{
 			Error: "Internal Server Error",
 		}
 		respondWithJSON(w, http.StatusInternalServerError, respBody)
@@ -110,7 +110,7 @@ func (apiCfg apiConfig) handlePostChirp(w http.ResponseWriter, req *http.Request
 	// success response
 	chirp, err := apiCfg.db.CreateChirp(filtered)
 	if err != nil {
-		respBody := failMsg{
+		respBody := genericErrorMsg{
 			Error: "Database Error",
 		}
 		respondWithJSON(w, http.StatusInternalServerError, respBody)
@@ -161,9 +161,7 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 	chirps, err := cfg.db.GetChirps()
 	if err != nil {
 		fmt.Printf("Getting chirps from DB: %s", err)
-		respBody := struct {
-			Error string `json:"error"`
-		}{
+		respBody := genericErrorMsg{
 			Error: "Database Error",
 		}
 		respondWithJSON(w, http.StatusInternalServerError, respBody)
