@@ -31,6 +31,12 @@ func TestDB(t *testing.T) {
 	// 	}
 	// }()
 
+	assertNoError := func(err error) {
+		if err != nil {
+			t.Errorf("%s", err)
+		}
+	}
+
 	{
 		chirps, err := db.GetChirps()
 		if err != nil {
@@ -42,10 +48,21 @@ func TestDB(t *testing.T) {
 		}
 	}
 
-	testAddChirp(db, "first chirp!", 1)
-	testAddChirp(db, "second chirp", 2)
+	assertNoError(testAddChirp(db, "first chirp!", 1))
+	assertNoError(testAddChirp(db, "second chirp", 2))
 
-	{
+	assertNoError(testAddUser(db, "x@ymail.com", "U@*#PFOcj mp", 1))
+	assertNoError(testAddUser(db, "abc@dmail.com", "10f9j", 2))
+	err = testAddUser(db, "x@ymail.com", ";alksdjf", -1)
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Errorf("expected %s, got %s", ErrEmailTaken, err)
+	}
+
+	assertNoError(testValidatePassword(db, "x@ymail.com", "U@*#PFOcj mp", 1, true))
+	assertNoError(testValidatePassword(db, "abc@dmail.com", "10f9j", 2, true))
+	err = testValidatePassword(db, "x@ymail.com", "wrong password", -1, false)
+	if !errors.Is(err, ErrWrongPassword) {
+		t.Errorf("expected ErrWrongPassword, got %s", err)
 	}
 }
 
@@ -73,22 +90,47 @@ func testAddChirp(db *DB, content string, expectID int) error {
 	return nil
 }
 
-func testAddUser(db *DB, email string, expectID int) error {
-	_, err := db.CreateUser(email)
+func testAddUser(db *DB, email, password string, expectID int) error {
+	_, err := db.CreateUser(email, password)
 	if err != nil {
-		return errors.New(fmt.Sprintf("CreateUser: %s", err))
+		return fmt.Errorf("CreateUser: %w", err)
 	}
 	users, err := db.GetUsers()
 	if err != nil {
-		return errors.New(fmt.Sprintf("GetUsers: %s", err))
+		return fmt.Errorf("GetUsers: %w", err)
 	}
 	if len(users) != expectID {
-		return errors.New(fmt.Sprintf(`Expected 1 users, got %d`, len(users)))
+		return fmt.Errorf(`Expected 1 users, got %d`, len(users))
 	}
-	expect := User{Id: expectID, Email: email}
+	expect := UserDTO{Id: expectID, Email: email}
 	got := users[expectID-1]
 	if got != expect {
-		return errors.New(fmt.Sprintf(`Expected user to be %+v\n got %+v`, expect, got))
+		return fmt.Errorf(`Expected user to be %+v\n got %+v`, expect, got)
+	}
+
+	return nil
+}
+
+func testValidatePassword(db *DB, email, password string, expectID int, expectPass bool) error {
+	// test that passwords work
+	user, err := db.ValidateUser(email, password)
+	if expectPass {
+		if err != nil {
+			return fmt.Errorf("expected no error, got %w", err)
+		}
+	} else {
+		if !errors.Is(err, ErrWrongPassword) {
+			return fmt.Errorf("expected ErrWrongPassword, got %w", err)
+		}
+		return err
+	}
+
+	if user.Email != email {
+		return fmt.Errorf("expected email to be %s, got %s", email, user.Email)
+	}
+
+	if user.Id != expectID {
+		return fmt.Errorf("expected id to be %d, got %d", expectID, user.Id)
 	}
 
 	return nil

@@ -20,11 +20,15 @@ import (
 func TestServer(t *testing.T) {
 	url := "localhost:9000"
 
-	_ = os.Remove(gDatabasePath)
+	_ = os.Remove(DEBUG_DATABASE_FILE)
 
 	serverErr := make(chan error, 1)
+	serverCfg := serverConfig{
+		address:      url,
+		databasePath: DEBUG_DATABASE_FILE,
+	}
 	go func() {
-		serverErr <- startServer(url)
+		serverErr <- startServer(serverCfg)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -46,14 +50,14 @@ func TestServer(t *testing.T) {
 
 	req = PostChirpRequest{"Hello!"}
 	exp1 := "Hello!"
-	testPost(t, chirps_url, req, 201, db.Chirp{Id: 1, Body: exp1})
+	testPost(t, chirps_url, req, 201, &db.Chirp{Id: 1, Body: exp1})
 
 	req = PostChirpRequest{strings.Repeat(".", 141)}
-	testPost(t, chirps_url, req, 400, genericFailMessage{"Chirp is too long"})
+	testPost(t, chirps_url, req, 400, &genericFailMessage{"Chirp is too long"})
 
 	req = PostChirpRequest{"This is a keRfUfFle opinion I need to share with the world!"}
 	exp2 := "This is a **** opinion I need to share with the world!"
-	testPost(t, chirps_url, req, 201, db.Chirp{Id: 2, Body: exp2})
+	testPost(t, chirps_url, req, 201, &db.Chirp{Id: 2, Body: exp2})
 
 	expect := []db.Chirp{
 		{Id: 1, Body: exp1},
@@ -68,12 +72,25 @@ func TestServer(t *testing.T) {
 
 	users_url := url + "/api/users"
 	exp1 = "x@ymail.com"
-	req_user := PostUserRequest{exp1}
-	testPost(t, users_url, req_user, 201, db.User{Id: 1, Email: exp1})
+	pw1 := "04234"
+	req_user := PostUserRequest{exp1, pw1}
+	testPost(t, users_url, req_user, 201, &db.User{Id: 1, Email: exp1})
 
 	exp2 = "abc@nomail.com"
-	req_user = PostUserRequest{exp2}
-	testPost(t, users_url, req_user, 201, db.User{Id: 2, Email: exp2})
+	pw2 := "10293"
+	req_user = PostUserRequest{exp2, pw2}
+	testPost(t, users_url, req_user, 201, &db.User{Id: 2, Email: exp2})
+
+	login_url := url + "/api/login"
+	req_login := PostUserRequest{exp1, pw1}
+	testPost(t, login_url, req_login, 200, &db.User{Id: 1, Email: exp1})
+
+	req_login = PostUserRequest{exp2, pw2}
+	testPost(t, login_url, req_login, 200, &db.User{Id: 2, Email: exp2})
+
+	req_login = PostUserRequest{exp2, "wrong password"}
+	var nocheck *struct{} = nil
+	testPost(t, login_url, req_login, http.StatusUnauthorized, nocheck)
 }
 
 // The returned body must be `Close`d after use
@@ -149,10 +166,11 @@ type genericFailMessage struct {
 	Error string `json:"error"`
 }
 type PostUserRequest struct {
-	Email string `json:"email"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
-func testPost[T, U any](t *testing.T, url string, req U, code int, expect T) {
+func testPost[T, U any](t *testing.T, url string, req U, code int, expect *T) {
 	var dat []byte
 	var err error
 	dat, err = json.Marshal(req)
@@ -171,6 +189,10 @@ func testPost[T, U any](t *testing.T, url string, req U, code int, expect T) {
 		return
 	}
 
+	if expect == nil {
+		return
+	}
+
 	var got T
 
 	decoder := json.NewDecoder(resp.Body)
@@ -181,7 +203,7 @@ func testPost[T, U any](t *testing.T, url string, req U, code int, expect T) {
 		return
 	}
 
-	if !reflect.DeepEqual(got, expect) {
-		t.Errorf(`Expected %+v\nGot %+v`, expect, got)
+	if !reflect.DeepEqual(got, *expect) {
+		t.Errorf(`Expected %+v\nGot %+v`, *expect, got)
 	}
 }

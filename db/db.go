@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Chirp struct {
@@ -14,6 +16,12 @@ type Chirp struct {
 }
 
 type User struct {
+	Id             int    `json:"id"`
+	Email          string `json:"email"`
+	HashedPassword []byte `json:"hashed_password"`
+}
+
+type UserDTO struct {
 	Id    int    `json:"id"`
 	Email string `json:"email"`
 }
@@ -28,7 +36,12 @@ type DBStruct struct {
 	Users  map[int]User  `json:"users"`
 }
 
-var errIsDir error = errors.New("the provided database path is a directory")
+var (
+	ErrIsDir             = errors.New("the provided database path is a directory")
+	ErrUnregisteredEmail = errors.New("email is not registered")
+	ErrEmailTaken        = errors.New("email already registered")
+	ErrWrongPassword     = bcrypt.ErrMismatchedHashAndPassword
+)
 
 // NewDB creates a new database connection
 // and creates the database file if it doesn't exist
@@ -47,6 +60,10 @@ func NewDBStruct(chirps []Chirp, users []User) DBStruct {
 	}
 
 	return dbstruct
+}
+
+func NewUserDTO(data User) UserDTO {
+	return UserDTO{data.Id, data.Email}
 }
 
 // creates database file if it doesn't exist
@@ -70,7 +87,7 @@ func (db *DB) ensureDB() error {
 		f.Write(dat)
 	} else {
 		if info.IsDir() {
-			return errIsDir
+			return ErrIsDir
 		}
 	}
 
@@ -94,16 +111,16 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	return chirps, nil
 }
 
-func (db *DB) GetUsers() ([]User, error) {
+func (db *DB) GetUsers() ([]UserDTO, error) {
 	dbStruct, err := db.loadDB()
 
 	if err != nil {
 		return nil, err
 	}
 
-	users := []User{}
+	users := []UserDTO{}
 	for _, user := range dbStruct.Users {
-		users = append(users, user)
+		users = append(users, NewUserDTO(user))
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i].Id < users[j].Id })
 
@@ -152,12 +169,24 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	return newChirp, err
 }
 
-func (db *DB) CreateUser(email string) (User, error) {
+func (db *DB) CreateUser(email, password string) (UserDTO, error) {
 	newUser := User{Email: email}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return NewUserDTO(newUser), err
+	}
+	newUser.HashedPassword = hashed
 
 	dbstruct, err := db.loadDB()
 	if err != nil {
-		return newUser, err
+		return NewUserDTO(newUser), err
+	}
+
+	for _, user := range dbstruct.Users {
+		if user.Email == email {
+			return NewUserDTO(newUser), ErrEmailTaken
+		}
 	}
 
 	maxID := 0
@@ -171,8 +200,31 @@ func (db *DB) CreateUser(email string) (User, error) {
 
 	err = db.writeDB(dbstruct)
 
-	return newUser, err
+	return NewUserDTO(newUser), err
+}
 
+// validates user and returns the user's details
+// If the password is wrong, ErrWrongPassword is returned
+// user details is only returned when validation passes
+func (db *DB) ValidateUser(email, password string) (*UserDTO, error) {
+	dbstruct, err := db.loadDB()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, user := range dbstruct.Users {
+		if user.Email == email {
+			err = bcrypt.CompareHashAndPassword(user.HashedPassword, []byte(password))
+			if err != nil {
+				return nil, err
+			}
+
+			userDTO := NewUserDTO(user)
+			return &userDTO, nil
+		}
+	}
+
+	return nil, ErrUnregisteredEmail
 }
 
 // writes the database file to disk

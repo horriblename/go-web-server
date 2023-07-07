@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +16,19 @@ import (
 	db "github.com/horriblename/go-web-server/db"
 )
 
-var gDatabasePath = "/tmp/database.json"
+const (
+	DEFAULT_DATABASE_FILE = "/tmp/database.json"
+	DEBUG_DATABASE_FILE   = "/tmp/debug-database.json"
+)
 
 type apiConfig struct {
 	fileserverHits int
 	db             *db.DB
+}
+
+type serverConfig struct {
+	databasePath string
+	address      string
 }
 
 type genericErrorMsg struct {
@@ -157,6 +166,43 @@ func caseInsensitiveReplace(input io.Reader, search, replace string) (string, er
 	return out.String(), err
 }
 
+func (cfg *apiConfig) handlePostLogin(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var params parameters
+	decoder := json.NewDecoder(req.Body)
+	err := decoder.Decode(&params)
+	if err != nil {
+		fmt.Printf("decoding json: %s", err)
+		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
+		return
+	}
+
+	user, err := cfg.db.ValidateUser(params.Email, params.Password)
+	if err == db.ErrWrongPassword {
+		fmt.Printf("user %s failed password check", params.Email)
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	if err != nil {
+		fmt.Printf("validating user: %s", err)
+		respondWithError(w, http.StatusInternalServerError, "Database Error")
+		return
+	}
+
+	if user == nil {
+		fmt.Printf("BUG: this should be unreachable")
+		respondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, user)
+}
+
 func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) {
 	chirps, err := cfg.db.GetChirps()
 	if err != nil {
@@ -197,9 +243,26 @@ func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Reques
 	respondWithError(w, http.StatusNotFound, "Chirp not found")
 }
 
+// func (cfg *apiConfig) handleGetUsers(w http.ResponseWriter, req *http.Request) {
+// 	users, err := cfg.db.GetUsers()
+// 	if err != nil {
+// 		fmt.Printf("Getting chirps from DB: %s", err)
+// 		respBody := struct {
+// 			Error string `json:"error"`
+// 		}{
+// 			Error: "Database Error",
+// 		}
+// 		respondWithJSON(w, http.StatusInternalServerError, respBody)
+// 		return
+// 	}
+//
+// 	respondWithJSON(w, http.StatusOK, users)
+// }
+
 func (cfg *apiConfig) handlePostUsers(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -210,7 +273,7 @@ func (cfg *apiConfig) handlePostUsers(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	user, err := cfg.db.CreateUser(params.Email)
+	user, err := cfg.db.CreateUser(params.Email, params.Password)
 	if err != nil {
 		respondWithJSON(w, http.StatusInternalServerError, "Database Error")
 		return
@@ -235,6 +298,7 @@ func chirpCtx(next http.Handler) http.Handler {
 func apiRouter(cfg *apiConfig) chi.Router {
 	router := chi.NewRouter()
 	router.Get("/healthz", handleReadinessCheck)
+	router.Post("/login", cfg.handlePostLogin)
 	router.Route("/chirps", func(r chi.Router) {
 		r.Get("/", cfg.handleGetChirps)
 		r.Post("/", cfg.handlePostChirp)
@@ -262,10 +326,10 @@ func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func startServer(host string) error {
+func startServer(serverCfg serverConfig) error {
 	router := chi.NewRouter()
 
-	db, err := db.New(gDatabasePath)
+	db, err := db.New(serverCfg.databasePath)
 	if err != nil {
 		panic(fmt.Sprintf("Creating DB: %s", err))
 	}
@@ -284,20 +348,28 @@ func startServer(host string) error {
 
 	server := http.Server{
 		Handler: router,
-		Addr:    host,
+		Addr:    serverCfg.address,
 	}
 
 	return server.ListenAndServe()
 }
 
 func main() {
-	args := os.Args
-	var host string
-	if len(args) > 1 {
-		host = args[1]
+	dbg := flag.Bool("debug", false, "Enable debug mode")
+	flag.Parse()
+	host := flag.Arg(0)
+
+	serverCfg := serverConfig{
+		databasePath: DEFAULT_DATABASE_FILE,
+		address:      host,
 	}
 
-	err := startServer(host)
+	if *dbg {
+		serverCfg.databasePath = DEBUG_DATABASE_FILE
+		_ = os.Remove(serverCfg.databasePath)
+	}
+
+	err := startServer(serverCfg)
 
 	if err != http.ErrServerClosed {
 		fmt.Printf("%s\n", err)
