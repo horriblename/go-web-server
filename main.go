@@ -124,9 +124,25 @@ func (apiCfg apiConfig) handlePostChirp(w http.ResponseWriter, req *http.Request
 		Body string `json:"body"`
 	}
 
+	token, err := validateJWT(w, req, apiCfg.jwtSecret)
+	if err != nil {
+		return
+	}
+
+	subject, err := token.Claims.GetSubject()
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	userID, err := strconv.Atoi(subject)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Bad Request")
+		return
+	}
+
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		// why tf are we sending internal server error??
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
@@ -151,7 +167,7 @@ func (apiCfg apiConfig) handlePostChirp(w http.ResponseWriter, req *http.Request
 	}
 
 	// success response
-	chirp, err := apiCfg.db.CreateChirp(filtered)
+	chirp, err := apiCfg.db.CreateChirp(userID, filtered)
 	if err != nil {
 		respBody := genericErrorMsg{
 			Error: "Database Error",

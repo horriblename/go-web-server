@@ -13,8 +13,9 @@ import (
 )
 
 type Chirp struct {
-	Id   int    `json:"id"`
-	Body string `json:"body"`
+	Id       int    `json:"id"`
+	AuthorID int    `json:"author_id"`
+	Body     string `json:"body"`
 }
 
 type User struct {
@@ -132,12 +133,12 @@ func (db *DB) GetUsers() ([]UserDTO, error) {
 	return users, nil
 }
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
-	newChirp := Chirp{Body: body}
+func (db *DB) CreateChirp(userID int, body string) (*Chirp, error) {
+	newChirp := Chirp{AuthorID: userID, Body: body}
 
 	dbstruct, err := db.loadDB()
 	if err != nil {
-		return newChirp, err
+		return nil, err
 	}
 
 	maxID := 0
@@ -151,7 +152,7 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 
 	err = db.writeDB(dbstruct)
 
-	return newChirp, err
+	return &newChirp, err
 }
 
 func (db *DB) CreateUser(email, password string) (UserDTO, error) {

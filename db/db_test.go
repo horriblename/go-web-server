@@ -48,15 +48,15 @@ func TestDB(t *testing.T) {
 		}
 	}
 
-	assertOk(testAddChirp(db, "first chirp!", 1))
-	assertOk(testAddChirp(db, "second chirp", 2))
-
 	assertOk(testAddUser(db, "x@ymail.com", "U@*#PFOcj mp", 1))
 	assertOk(testAddUser(db, "abc@dmail.com", "10f9j", 2))
 	err = testAddUser(db, "x@ymail.com", ";alksdjf", -1)
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Errorf("expected %s, got %s", ErrEmailTaken, err)
 	}
+
+	assertOk(testAddChirp(db, "first chirp!", 1, 1))
+	assertOk(testAddChirp(db, "second chirp", 2, 2))
 
 	assertOk(testValidatePassword(db, "x@ymail.com", "U@*#PFOcj mp", 1, true))
 	assertOk(testValidatePassword(db, "abc@dmail.com", "10f9j", 2, true))
@@ -78,13 +78,13 @@ func TestDB(t *testing.T) {
 	assertOk(db.CheckTokenRevocation("not_revoked"))
 }
 
-func testAddChirp(db *DB, content string, expectID int) error {
-	expect := Chirp{Id: expectID, Body: content}
-	createdChirp, err := db.CreateChirp(content)
+func testAddChirp(db *DB, content string, authorID, expectID int) error {
+	expect := Chirp{Id: expectID, Body: content, AuthorID: authorID}
+	createdChirp, err := db.CreateChirp(authorID, content)
 	if err != nil {
 		return err
 	}
-	if createdChirp != expect {
+	if *createdChirp != expect {
 		return errors.New(fmt.Sprintf(`Expected chirp to be %+v\n got %+v`, expect, createdChirp))
 	}
 	chirps, err := db.GetChirps()

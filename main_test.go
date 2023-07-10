@@ -54,34 +54,6 @@ func TestServer(t *testing.T) {
 	// TODO check it returns 2
 	assertOk(testHttpRequest("GET", nil, url+"/admin/metrics", nil, http.StatusOK, gNoCheck))
 
-	// test /api/chirp
-
-	var req PostChirpRequest
-	chirps_url := url + "/api/chirps"
-	assertOk(testHttpRequest("GET", nil, chirps_url, nil, http.StatusOK, gNoCheck))
-
-	req = PostChirpRequest{"Hello!"}
-	exp1 := "Hello!"
-	assertOk(testHttpRequest("POST", nil, chirps_url, req, 201, &db.Chirp{Id: 1, Body: exp1}))
-
-	req = PostChirpRequest{strings.Repeat(".", 141)}
-	assertOk(testHttpRequest("POST", nil, chirps_url, req, 400, &genericFailMessage{"Chirp is too long"}))
-
-	req = PostChirpRequest{"This is a keRfUfFle opinion I need to share with the world!"}
-	exp2 := "This is a **** opinion I need to share with the world!"
-	assertOk(testHttpRequest("POST", nil, chirps_url, req, 201, &db.Chirp{Id: 2, Body: exp2}))
-
-	expect := []db.Chirp{
-		{Id: 1, Body: exp1},
-		{Id: 2, Body: exp2},
-	}
-	assertOk(testHttpRequest("GET", nil, chirps_url, nil, http.StatusOK, &expect))
-
-	// get chirp by id
-	assertOk(testHttpRequest("GET", nil, url+"/api/chirps/1", nil, http.StatusOK, &expect[0]))
-	// TODO check returned result
-	assertOk(testHttpRequest("GET", nil, url+"/api/chirps/100", nil, http.StatusNotFound, gNoCheck))
-
 	users_url := url + "/api/users"
 	email1 := "x@ymail.com"
 	pw1 := "04234"
@@ -117,13 +89,37 @@ func TestServer(t *testing.T) {
 	// Login User With Wrong Password
 	assertOk(testHttpRequestString("POST", nil, login_url, req_login, http.StatusUnauthorized, "Unauthorized"))
 
-	type userValidation struct {
-		Email string `json:"email"`
-	}
+	// test /api/chirp
+	var req_post_chirp PostChirpRequest
+	chirps_url := url + "/api/chirps"
+	assertOk(testHttpRequest("GET", nil, chirps_url, nil, http.StatusOK, gNoCheck))
 
-	header := map[string]string{
-		"Authorization": "Bearer " + accToken1,
-	}
+	req_post_chirp = PostChirpRequest{"Hello!"}
+	header := newAuthenticatedHeader(accToken1)
+	chirp1 := db.Chirp{Id: 1, AuthorID: 1, Body: "Hello!"}
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 201, &chirp1))
+
+	req_post_chirp = PostChirpRequest{strings.Repeat(".", 141)}
+	header = newAuthenticatedHeader(accToken1)
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 400, &genericFailMessage{"Chirp is too long"}))
+
+	req_post_chirp = PostChirpRequest{"This is a keRfUfFle opinion I need to share with the world!"}
+	chirp2 := db.Chirp{Id: 2, AuthorID: 2, Body: "This is a **** opinion I need to share with the world!"}
+	header = newAuthenticatedHeader(accToken2)
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 201, &chirp2))
+
+	req_post_chirp = PostChirpRequest{"Posting without logging in"}
+	testHttpRequest("POST", nil, chirps_url, req_post_chirp, http.StatusUnauthorized, gNoCheck)
+
+	expect := []db.Chirp{chirp1, chirp2}
+	assertOk(testHttpRequest("GET", nil, chirps_url, nil, http.StatusOK, &expect))
+
+	// get chirp by id
+	assertOk(testHttpRequest("GET", nil, url+"/api/chirps/1", nil, http.StatusOK, &expect[0]))
+	// TODO check returned result
+	assertOk(testHttpRequest("GET", nil, url+"/api/chirps/100", nil, http.StatusNotFound, gNoCheck))
+
+	header = newAuthenticatedHeader(accToken1)
 	req_put_users := PostUserRequest{
 		Email:    email1,
 		Password: "043234",
@@ -132,9 +128,7 @@ func TestServer(t *testing.T) {
 	_, err = testHttpWithResponse[LoginSuccessResponse]("PUT", header, users_url, req_put_users, 200)
 	assertOk(err)
 
-	header = map[string]string{
-		"Authorization": "Bearer " + accToken2,
-	}
+	header = newAuthenticatedHeader(accToken2)
 	req_put_users = PostUserRequest{
 		Email:    "new@email.com",
 		Password: pw2,
@@ -145,23 +139,17 @@ func TestServer(t *testing.T) {
 
 	refresh_url := url + "/api/refresh"
 	empty_req := struct{}{}
-	header = map[string]string{
-		"Authorization": "Bearer " + refreshToken1,
-	}
+	header = newAuthenticatedHeader(refreshToken1)
 	// refresh token
 	_, err = testHttpWithResponse[PostRefreshResponse]("POST", header, refresh_url, empty_req, 200)
 	assertOk(err)
 
-	header = map[string]string{
-		"Authorization": "Bearer " + accToken2,
-	}
+	header = newAuthenticatedHeader(accToken2)
 	// refresh token reject wrong token
 	assertOk(testHttpRequest("POST", header, refresh_url, empty_req, http.StatusUnauthorized, gNoCheck))
 
 	revoke_url := url + "/api/revoke"
-	header = map[string]string{
-		"Authorization": "Bearer " + refreshToken1,
-	}
+	header = newAuthenticatedHeader(refreshToken1)
 	// revoke refresh token of user 1
 	assertOk(testHttpRequest("POST", header, revoke_url, empty_req, http.StatusOK, gNoCheck))
 	assertOk(testHttpRequest("POST", header, refresh_url, empty_req, http.StatusUnauthorized, gNoCheck))
@@ -275,4 +263,10 @@ func testHttpWithResponse[T any](method string, headers map[string]string, url s
 	}
 
 	return &got, nil
+}
+
+func newAuthenticatedHeader(jwt_token string) map[string]string {
+	return map[string]string{
+		"Authorization": "Bearer " + jwt_token,
+	}
 }
