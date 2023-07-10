@@ -31,7 +31,7 @@ func TestDB(t *testing.T) {
 	// 	}
 	// }()
 
-	assertNoError := func(err error) {
+	assertOk := func(err error) {
 		if err != nil {
 			t.Errorf("%s", err)
 		}
@@ -48,25 +48,25 @@ func TestDB(t *testing.T) {
 		}
 	}
 
-	assertNoError(testAddChirp(db, "first chirp!", 1))
-	assertNoError(testAddChirp(db, "second chirp", 2))
+	assertOk(testAddChirp(db, "first chirp!", 1))
+	assertOk(testAddChirp(db, "second chirp", 2))
 
-	assertNoError(testAddUser(db, "x@ymail.com", "U@*#PFOcj mp", 1))
-	assertNoError(testAddUser(db, "abc@dmail.com", "10f9j", 2))
+	assertOk(testAddUser(db, "x@ymail.com", "U@*#PFOcj mp", 1))
+	assertOk(testAddUser(db, "abc@dmail.com", "10f9j", 2))
 	err = testAddUser(db, "x@ymail.com", ";alksdjf", -1)
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Errorf("expected %s, got %s", ErrEmailTaken, err)
 	}
 
-	assertNoError(testValidatePassword(db, "x@ymail.com", "U@*#PFOcj mp", 1, true))
-	assertNoError(testValidatePassword(db, "abc@dmail.com", "10f9j", 2, true))
+	assertOk(testValidatePassword(db, "x@ymail.com", "U@*#PFOcj mp", 1, true))
+	assertOk(testValidatePassword(db, "abc@dmail.com", "10f9j", 2, true))
 	err = testValidatePassword(db, "x@ymail.com", "wrong password", -1, false)
 	if !errors.Is(err, ErrWrongPassword) {
 		t.Errorf("expected ErrWrongPassword, got %s", err)
 	}
 
-	assertNoError(testUpdateUser(db, 1, "new@ymail.com", "U@*#PFOcj mp"))
-	assertNoError(testUpdateUser(db, 2, "new@dmail.com", "new_password"))
+	assertOk(testUpdateUser(db, 1, "new@ymail.com", "U@*#PFOcj mp"))
+	assertOk(testUpdateUser(db, 2, "new@dmail.com", "new_password"))
 }
 
 func testAddChirp(db *DB, content string, expectID int) error {
