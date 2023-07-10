@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"sync"
@@ -41,6 +42,7 @@ var (
 	ErrUnregisteredEmail = errors.New("email is not registered")
 	ErrEmailTaken        = errors.New("email already registered")
 	ErrWrongPassword     = bcrypt.ErrMismatchedHashAndPassword
+	ErrInvalidUserID     = errors.New("user ID not found in database")
 )
 
 // NewDB creates a new database connection
@@ -201,6 +203,35 @@ func (db *DB) CreateUser(email, password string) (UserDTO, error) {
 	err = db.writeDB(dbstruct)
 
 	return NewUserDTO(newUser), err
+}
+
+func (db *DB) UpdateUser(id int, new_email, new_password string) (*UserDTO, error) {
+	dbstruct, err := db.loadDB()
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := dbstruct.Users[id]; !ok {
+		return nil, fmt.Errorf("%w, missing id: %d", err, id)
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(new_password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+
+	updatedUser := User{
+		Id:             id,
+		Email:          new_email,
+		HashedPassword: hashed,
+	}
+	dbstruct.Users[id] = updatedUser
+	db.writeDB(dbstruct)
+
+	// TODO: check for duplicate emails
+
+	dto := NewUserDTO(updatedUser)
+	return &dto, nil
 }
 
 // validates user and returns the user's details

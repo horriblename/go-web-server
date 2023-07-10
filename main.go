@@ -11,19 +11,25 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
 	db "github.com/horriblename/go-web-server/db"
+	godotenv "github.com/joho/godotenv"
 )
 
 const (
-	DEFAULT_DATABASE_FILE = "/tmp/database.json"
-	DEBUG_DATABASE_FILE   = "/tmp/debug-database.json"
+	DEFAULT_DATABASE_FILE         = "/tmp/database.json"
+	DEBUG_DATABASE_FILE           = "/tmp/debug-database.json"
+	DefaultJWTExpirationInSeconds = 24 * 60 * 60 // 24 hours
+	MaxJWTExpirationInSeconds     = 24 * 60 * 60 // 24 hours
 )
 
 type apiConfig struct {
 	fileserverHits int
 	db             *db.DB
+	jwtSecret      []byte
 }
 
 type serverConfig struct {
@@ -33,6 +39,18 @@ type serverConfig struct {
 
 type genericErrorMsg struct {
 	Error string `json:"error"`
+}
+
+type PostLoginParameters struct {
+	Email          string `json:"email"`
+	Password       string `json:"password"`
+	ExpiresSeconds int    `json:"expires_in_seconds,omitempty"`
+}
+
+type LoginSuccessResponse struct {
+	Id    int    `json:"id"`
+	Email string `json:"email"`
+	Token string `json:"token"`
 }
 
 var gProfanity []string = []string{"kerfuffle", "sharbert", "fornax"}
@@ -77,7 +95,7 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	dat, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Printf("Error marshalling JSON: %s", err)
+		fmt.Printf("Error marshalling JSON: %s\n", err)
 	}
 
 	w.WriteHeader(code)
@@ -167,46 +185,71 @@ func caseInsensitiveReplace(input io.Reader, search, replace string) (string, er
 }
 
 func (cfg *apiConfig) handlePostLogin(w http.ResponseWriter, req *http.Request) {
-	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+	var params = PostLoginParameters{
+		ExpiresSeconds: DefaultJWTExpirationInSeconds,
 	}
-
-	var params parameters
 	decoder := json.NewDecoder(req.Body)
 	err := decoder.Decode(&params)
 	if err != nil {
-		fmt.Printf("decoding json: %s", err)
+		fmt.Printf("decoding json: %s\n", err)
 		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
 		return
 	}
 
+	if params.ExpiresSeconds > MaxJWTExpirationInSeconds {
+		params.ExpiresSeconds = MaxJWTExpirationInSeconds
+	}
+	if params.ExpiresSeconds <= 0 {
+		params.ExpiresSeconds = DefaultJWTExpirationInSeconds
+	}
+
 	user, err := cfg.db.ValidateUser(params.Email, params.Password)
 	if err == db.ErrWrongPassword {
-		fmt.Printf("user %s failed password check", params.Email)
+		fmt.Printf("user %s failed password check\n", params.Email)
 		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	if err != nil {
-		fmt.Printf("validating user: %s", err)
+		fmt.Printf("validating user: %s\n", err)
 		respondWithError(w, http.StatusInternalServerError, "Database Error")
 		return
 	}
 
 	if user == nil {
-		fmt.Printf("BUG: this should be unreachable")
+		fmt.Printf("BUG: this should be unreachable\n")
 		respondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, user)
+	claims := jwt.RegisteredClaims{
+		Issuer:    "chirpy",
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(params.ExpiresSeconds) * time.Second)),
+		Subject:   strconv.Itoa(user.Id),
+	}
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token, err := jwtToken.SignedString(cfg.jwtSecret)
+
+	if err != nil {
+		fmt.Printf("signing JWT token: %s\n", err)
+		respondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	resp := LoginSuccessResponse{
+		Id:    user.Id,
+		Email: user.Email,
+		Token: token,
+	}
+
+	respondWithJSON(w, http.StatusOK, resp)
 }
 
 func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) {
 	chirps, err := cfg.db.GetChirps()
 	if err != nil {
-		fmt.Printf("Getting chirps from DB: %s", err)
+		fmt.Printf("Getting chirps from DB: %s\n", err)
 		respBody := genericErrorMsg{
 			Error: "Database Error",
 		}
@@ -222,7 +265,7 @@ func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Reques
 
 	chirps, err := cfg.db.GetChirps()
 	if err != nil {
-		fmt.Printf("Getting chirps from DB: %s", err)
+		fmt.Printf("Getting chirps from DB: %s\n", err)
 		respBody := struct {
 			Error string `json:"error"`
 		}{
@@ -246,7 +289,7 @@ func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Reques
 // func (cfg *apiConfig) handleGetUsers(w http.ResponseWriter, req *http.Request) {
 // 	users, err := cfg.db.GetUsers()
 // 	if err != nil {
-// 		fmt.Printf("Getting chirps from DB: %s", err)
+// 		fmt.Printf("Getting chirps from DB: %s\n", err)
 // 		respBody := struct {
 // 			Error string `json:"error"`
 // 		}{
@@ -281,6 +324,77 @@ func (cfg *apiConfig) handlePostUsers(w http.ResponseWriter, req *http.Request) 
 	respondWithJSON(w, 201, user)
 }
 
+func (cfg *apiConfig) handlePutUserById(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	var params parameters
+	// header format:
+	//	  Authorization: Bearer <token>
+	auth := req.Header.Get("Authorization")
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		respondWithError(w, http.StatusBadRequest, `Malformed "Authorization" in Header`)
+		return
+	}
+	tokStr := strings.TrimPrefix(auth, prefix)
+	claims := jwt.RegisteredClaims{
+		Issuer: "chirpy",
+	}
+
+	token, err := jwt.ParseWithClaims(tokStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return cfg.jwtSecret, nil
+	})
+	if err != nil {
+		if err == jwt.ErrSignatureInvalid {
+			// TODO: log
+			respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		fmt.Printf("parsing token: %s\n", err)
+		respondWithError(w, http.StatusBadRequest, "Bad Request")
+		return
+	}
+
+	if !token.Valid {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	// authorized
+
+	userIDStr, err := token.Claims.GetSubject()
+	if err != nil {
+		// TODO: log?
+		respondWithError(w, http.StatusBadRequest, "Missing Subject in Token")
+		return
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	err = decoder.Decode(&params)
+	if err != nil {
+		fmt.Printf("decoding json: %s\n", err)
+		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
+		return
+	}
+
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Token Subject is not an ID")
+		return
+	}
+
+	updatedUser, err := cfg.db.UpdateUser(userID, params.Email, params.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Database Error")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, updatedUser)
+}
+
 func chirpCtx(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		chirpIDStr := chi.URLParam(req, "chirpID")
@@ -306,6 +420,7 @@ func apiRouter(cfg *apiConfig) chi.Router {
 	})
 	router.Route("/users", func(r chi.Router) {
 		r.Post("/", cfg.handlePostUsers)
+		r.Put("/", cfg.handlePutUserById)
 	})
 
 	return router
@@ -326,7 +441,7 @@ func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func startServer(serverCfg serverConfig) error {
+func startServer(serverCfg serverConfig, jwtSecret []byte) error {
 	router := chi.NewRouter()
 
 	db, err := db.New(serverCfg.databasePath)
@@ -334,7 +449,7 @@ func startServer(serverCfg serverConfig) error {
 		panic(fmt.Sprintf("Creating DB: %s", err))
 	}
 
-	apiCfg := apiConfig{db: db}
+	apiCfg := apiConfig{db: db, jwtSecret: jwtSecret}
 	fileServer := apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))
 
 	// if not using chi
@@ -359,6 +474,8 @@ func main() {
 	flag.Parse()
 	host := flag.Arg(0)
 
+	godotenv.Load()
+
 	serverCfg := serverConfig{
 		databasePath: DEFAULT_DATABASE_FILE,
 		address:      host,
@@ -369,7 +486,13 @@ func main() {
 		_ = os.Remove(serverCfg.databasePath)
 	}
 
-	err := startServer(serverCfg)
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		fmt.Printf("empty JWT_SECRET!\n")
+		os.Exit(1)
+	}
+
+	err := startServer(serverCfg, []byte(jwtSecret))
 
 	if err != http.ErrServerClosed {
 		fmt.Printf("%s\n", err)

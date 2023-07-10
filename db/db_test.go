@@ -64,6 +64,9 @@ func TestDB(t *testing.T) {
 	if !errors.Is(err, ErrWrongPassword) {
 		t.Errorf("expected ErrWrongPassword, got %s", err)
 	}
+
+	assertNoError(testUpdateUser(db, 1, "new@ymail.com", "U@*#PFOcj mp"))
+	assertNoError(testUpdateUser(db, 2, "new@dmail.com", "new_password"))
 }
 
 func testAddChirp(db *DB, content string, expectID int) error {
@@ -131,6 +134,30 @@ func testValidatePassword(db *DB, email, password string, expectID int, expectPa
 
 	if user.Id != expectID {
 		return fmt.Errorf("expected id to be %d, got %d", expectID, user.Id)
+	}
+
+	return nil
+}
+
+func testUpdateUser(db *DB, id int, new_email, new_password string) error {
+	_, err := db.UpdateUser(id, new_email, new_password)
+	if err != nil {
+		return err
+	}
+
+	dbstruct, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	got := dbstruct.Users[id].Email
+	if got != new_email {
+		return fmt.Errorf("expected updated email to be %s, got %s", new_email, got)
+	}
+
+	_, err = db.ValidateUser(new_email, new_password)
+	if err != nil {
+		return fmt.Errorf("validating updated password: %w", err)
 	}
 
 	return nil
