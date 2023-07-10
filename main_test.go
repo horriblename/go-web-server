@@ -102,14 +102,16 @@ func TestServer(t *testing.T) {
 	// Login User 1
 	login_resp, err = testHttpWithResponse[LoginSuccessResponse]("POST", nil, login_url, req_login, 200)
 	assertOk(err)
-	token1 := login_resp.Token
+	accToken1 := login_resp.Token
+	refreshToken1 := login_resp.RefreshToken
 
 	req_login = PostUserRequest{email2, pw2}
 	// Login User 2
 	login_resp, err = testHttpWithResponse[LoginSuccessResponse]("POST", nil, login_url, req_login, 200)
 	assertOk(err)
 
-	token2 := login_resp.Token
+	accToken2 := login_resp.Token
+	// refreshToken2 := login_resp.RefreshToken
 
 	req_login = PostUserRequest{email2, "wrong password"}
 	// Login User With Wrong Password
@@ -120,26 +122,50 @@ func TestServer(t *testing.T) {
 	}
 
 	header := map[string]string{
-		"Authorization": "Bearer " + token1,
+		"Authorization": "Bearer " + accToken1,
 	}
 	req_put_users := PostUserRequest{
 		Email:    email1,
 		Password: "043234",
 	}
 	// PUT /api/users: change password
-	login_resp, err = testHttpWithResponse[LoginSuccessResponse]("PUT", header, users_url, req_put_users, 200)
+	_, err = testHttpWithResponse[LoginSuccessResponse]("PUT", header, users_url, req_put_users, 200)
 	assertOk(err)
 
 	header = map[string]string{
-		"Authorization": "Bearer " + token2,
+		"Authorization": "Bearer " + accToken2,
 	}
 	req_put_users = PostUserRequest{
 		Email:    "new@email.com",
 		Password: pw2,
 	}
 	// PUT /api/users: change email
-	login_resp, err = testHttpWithResponse[LoginSuccessResponse]("PUT", header, users_url, req_put_users, 200)
+	_, err = testHttpWithResponse[LoginSuccessResponse]("PUT", header, users_url, req_put_users, 200)
 	assertOk(err)
+
+	refresh_url := url + "/api/refresh"
+	empty_req := struct{}{}
+	header = map[string]string{
+		"Authorization": "Bearer " + refreshToken1,
+	}
+	// refresh token
+	_, err = testHttpWithResponse[PostRefreshResponse]("POST", header, refresh_url, empty_req, 200)
+	assertOk(err)
+
+	header = map[string]string{
+		"Authorization": "Bearer " + accToken2,
+	}
+	// refresh token reject wrong token
+	assertOk(testHttpRequest("POST", header, refresh_url, empty_req, http.StatusUnauthorized, gNoCheck))
+
+	revoke_url := url + "/api/revoke"
+	header = map[string]string{
+		"Authorization": "Bearer " + refreshToken1,
+	}
+	// revoke refresh token of user 1
+	assertOk(testHttpRequest("POST", header, revoke_url, empty_req, http.StatusOK, gNoCheck))
+	assertOk(testHttpRequest("POST", header, refresh_url, empty_req, http.StatusUnauthorized, gNoCheck))
+
 }
 
 func testHttpRequestString(method string, headers map[string]string, url string, req any, code int, expect string) error {

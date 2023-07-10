@@ -67,6 +67,15 @@ func TestDB(t *testing.T) {
 
 	assertOk(testUpdateUser(db, 1, "new@ymail.com", "U@*#PFOcj mp"))
 	assertOk(testUpdateUser(db, 2, "new@dmail.com", "new_password"))
+
+	revokedToken := "revoked_token"
+	assertOk(db.AddTokenRevocation(revokedToken))
+	err = db.CheckTokenRevocation(revokedToken)
+	if err != ErrTokenRevoked {
+		t.Errorf(`Expected error to be %s, got %s`, ErrTokenRevoked, err)
+	}
+
+	assertOk(db.CheckTokenRevocation("not_revoked"))
 }
 
 func testAddChirp(db *DB, content string, expectID int) error {

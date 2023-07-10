@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -33,8 +34,9 @@ type DB struct {
 }
 
 type DBStruct struct {
-	Chirps map[int]Chirp `json:"chirps"`
-	Users  map[int]User  `json:"users"`
+	Chirps               map[int]Chirp        `json:"chirps"`
+	Users                map[int]User         `json:"users"`
+	RevokedRefreshTokens map[string]time.Time `json:"revoked_tokens"`
 }
 
 var (
@@ -43,6 +45,7 @@ var (
 	ErrEmailTaken        = errors.New("email already registered")
 	ErrWrongPassword     = bcrypt.ErrMismatchedHashAndPassword
 	ErrInvalidUserID     = errors.New("user ID not found in database")
+	ErrTokenRevoked      = errors.New("token is revoked")
 )
 
 // NewDB creates a new database connection
@@ -53,7 +56,7 @@ func New(path string) (*DB, error) {
 }
 
 func NewDBStruct(chirps []Chirp, users []User) DBStruct {
-	dbstruct := DBStruct{make(map[int]Chirp), make(map[int]User)}
+	dbstruct := DBStruct{make(map[int]Chirp), make(map[int]User), make(map[string]time.Time)}
 	for _, chirp := range chirps {
 		dbstruct.Chirps[chirp.Id] = chirp
 	}
@@ -80,7 +83,7 @@ func (db *DB) ensureDB() error {
 		}
 		defer f.Close()
 
-		dbStruct := DBStruct{make(map[int]Chirp), make(map[int]User)}
+		dbStruct := DBStruct{make(map[int]Chirp), make(map[int]User), make(map[string]time.Time)}
 		dat, err := json.Marshal(dbStruct)
 		if err != nil {
 			return err
@@ -127,26 +130,6 @@ func (db *DB) GetUsers() ([]UserDTO, error) {
 	sort.Slice(users, func(i, j int) bool { return users[i].Id < users[j].Id })
 
 	return users, nil
-}
-
-// loadDB reads the database file into memory
-func (db *DB) loadDB() (DBStruct, error) {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
-
-	var dbStruct DBStruct
-
-	f, err := os.Open(db.path)
-	defer f.Close()
-
-	if err != nil {
-		return dbStruct, err
-	}
-
-	decoder := json.NewDecoder(f)
-	err = decoder.Decode(&dbStruct)
-
-	return dbStruct, err
 }
 
 func (db *DB) CreateChirp(body string) (Chirp, error) {
@@ -256,6 +239,56 @@ func (db *DB) ValidateUser(email, password string) (*UserDTO, error) {
 	}
 
 	return nil, ErrUnregisteredEmail
+}
+
+// Checks if a token is marked as revoked. If an error is returned, the token should not be used.
+// in particular, if a token is marked as revoked in the database, an ErrTokenRevoked is returned.
+func (db *DB) CheckTokenRevocation(token string) error {
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	if _, ok := dbStruct.RevokedRefreshTokens[token]; ok {
+		return ErrTokenRevoked
+	}
+
+	return nil
+}
+
+func (db *DB) AddTokenRevocation(token string) error {
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	dbStruct.RevokedRefreshTokens[token] = time.Now()
+	err = db.writeDB(dbStruct)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// loadDB reads the database file into memory
+func (db *DB) loadDB() (DBStruct, error) {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+
+	var dbStruct DBStruct
+
+	f, err := os.Open(db.path)
+	defer f.Close()
+
+	if err != nil {
+		return dbStruct, err
+	}
+
+	decoder := json.NewDecoder(f)
+	err = decoder.Decode(&dbStruct)
+
+	return dbStruct, err
 }
 
 // writes the database file to disk

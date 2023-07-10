@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,10 +21,17 @@ import (
 )
 
 const (
-	DEFAULT_DATABASE_FILE         = "/tmp/database.json"
-	DEBUG_DATABASE_FILE           = "/tmp/debug-database.json"
-	DefaultJWTExpirationInSeconds = 24 * 60 * 60 // 24 hours
-	MaxJWTExpirationInSeconds     = 24 * 60 * 60 // 24 hours
+	DEFAULT_DATABASE_FILE            = "/tmp/database.json"
+	DEBUG_DATABASE_FILE              = "/tmp/debug-database.json"
+	gAccessTokenExpirationInSeconds  = 1 * 60 * 60       // 1 hours
+	gRefreshTokenExpirationInSeconds = 60 * 24 * 60 * 60 // 60 days
+	gAccessTokIssuer                 = "chirpy-access"
+	gRefreshTokIssuer                = "chirpy-refresh"
+)
+
+var (
+	ErrBadAuthHeader     = errors.New("bad Authorization in header")
+	ErrUnauthorizedToken = errors.New("Unauthorized Token")
 )
 
 type apiConfig struct {
@@ -42,14 +50,22 @@ type genericErrorMsg struct {
 }
 
 type PostLoginParameters struct {
-	Email          string `json:"email"`
-	Password       string `json:"password"`
-	ExpiresSeconds int    `json:"expires_in_seconds,omitempty"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type LoginSuccessResponse struct {
-	Id    int    `json:"id"`
-	Email string `json:"email"`
+	Id           int    `json:"id"`
+	Email        string `json:"email"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type PostRefreshParameters struct {
+	RefreshToken string `json:"token"`
+}
+
+type PostRefreshResponse struct {
 	Token string `json:"token"`
 }
 
@@ -185,22 +201,13 @@ func caseInsensitiveReplace(input io.Reader, search, replace string) (string, er
 }
 
 func (cfg *apiConfig) handlePostLogin(w http.ResponseWriter, req *http.Request) {
-	var params = PostLoginParameters{
-		ExpiresSeconds: DefaultJWTExpirationInSeconds,
-	}
+	var params = PostLoginParameters{}
 	decoder := json.NewDecoder(req.Body)
 	err := decoder.Decode(&params)
 	if err != nil {
 		fmt.Printf("decoding json: %s\n", err)
 		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
 		return
-	}
-
-	if params.ExpiresSeconds > MaxJWTExpirationInSeconds {
-		params.ExpiresSeconds = MaxJWTExpirationInSeconds
-	}
-	if params.ExpiresSeconds <= 0 {
-		params.ExpiresSeconds = DefaultJWTExpirationInSeconds
 	}
 
 	user, err := cfg.db.ValidateUser(params.Email, params.Password)
@@ -222,25 +229,35 @@ func (cfg *apiConfig) handlePostLogin(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	claims := jwt.RegisteredClaims{
-		Issuer:    "chirpy",
+	accessTokClaims := jwt.RegisteredClaims{
+		Issuer:    gAccessTokIssuer,
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(params.ExpiresSeconds) * time.Second)),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(gAccessTokenExpirationInSeconds) * time.Second)),
 		Subject:   strconv.Itoa(user.Id),
 	}
-	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	token, err := jwtToken.SignedString(cfg.jwtSecret)
+	refreshTokClaims := jwt.RegisteredClaims{
+		Issuer:    gRefreshTokIssuer,
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(gRefreshTokenExpirationInSeconds) * time.Second)),
+		Subject:   strconv.Itoa(user.Id),
+	}
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessTokClaims)
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokClaims)
 
+	accessTokStr, err := accessToken.SignedString(cfg.jwtSecret)
 	if err != nil {
 		fmt.Printf("signing JWT token: %s\n", err)
 		respondWithError(w, http.StatusInternalServerError, "Internal Error")
 		return
 	}
 
+	refreshTokStr, err := refreshToken.SignedString(cfg.jwtSecret)
+
 	resp := LoginSuccessResponse{
-		Id:    user.Id,
-		Email: user.Email,
-		Token: token,
+		Id:           user.Id,
+		Email:        user.Email,
+		Token:        accessTokStr,
+		RefreshToken: refreshTokStr,
 	}
 
 	respondWithJSON(w, http.StatusOK, resp)
@@ -330,40 +347,18 @@ func (cfg *apiConfig) handlePutUserById(w http.ResponseWriter, req *http.Request
 		Password string `json:"password"`
 	}
 	var params parameters
-	// header format:
-	//	  Authorization: Bearer <token>
-	auth := req.Header.Get("Authorization")
-
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		respondWithError(w, http.StatusBadRequest, `Malformed "Authorization" in Header`)
-		return
-	}
-	tokStr := strings.TrimPrefix(auth, prefix)
-	claims := jwt.RegisteredClaims{
-		Issuer: "chirpy",
-	}
-
-	token, err := jwt.ParseWithClaims(tokStr, &claims, func(token *jwt.Token) (interface{}, error) {
-		return cfg.jwtSecret, nil
-	})
+	token, err := validateJWT(w, req, cfg.jwtSecret)
 	if err != nil {
-		if err == jwt.ErrSignatureInvalid {
-			// TODO: log
-			respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-			return
-		}
-		fmt.Printf("parsing token: %s\n", err)
-		respondWithError(w, http.StatusBadRequest, "Bad Request")
 		return
 	}
 
-	if !token.Valid {
-		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+	if iss, err := token.Claims.GetIssuer(); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Missing Issuer in Token")
+		return
+	} else if iss != gAccessTokIssuer {
+		respondWithError(w, http.StatusUnauthorized, "Wrong Issuer")
 		return
 	}
-
-	// authorized
 
 	userIDStr, err := token.Claims.GetSubject()
 	if err != nil {
@@ -395,6 +390,93 @@ func (cfg *apiConfig) handlePutUserById(w http.ResponseWriter, req *http.Request
 	respondWithJSON(w, http.StatusOK, updatedUser)
 }
 
+func (cfg *apiConfig) handlePostRefresh(w http.ResponseWriter, req *http.Request) {
+	token, err := validateJWT(w, req, cfg.jwtSecret)
+	if err != nil {
+		return
+	}
+
+	auth := req.Header.Get("Authorization")
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		respondWithError(w, http.StatusBadRequest, `Malformed "Authorization" in Header`)
+		return
+	}
+	tokStr := strings.TrimPrefix(auth, prefix)
+	if err := cfg.db.CheckTokenRevocation(tokStr); err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Token Revoked or Database Error")
+		return
+	}
+
+	if iss, err := token.Claims.GetIssuer(); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Token Missing Issuer")
+		return
+	} else if iss != gRefreshTokIssuer {
+		fmt.Printf("request refresh: wrong issuer %s\n", iss)
+		respondWithError(w, http.StatusUnauthorized, "Wrong Issuer")
+		return
+	}
+
+	subject, err := token.Claims.GetSubject()
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Token Missing Subject")
+		return
+	}
+
+	accessTokClaims := jwt.RegisteredClaims{
+		Issuer:    gAccessTokIssuer,
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(gAccessTokenExpirationInSeconds) * time.Second)),
+		Subject:   subject,
+	}
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessTokClaims)
+
+	accessTokStr, err := accessToken.SignedString(cfg.jwtSecret)
+	if err != nil {
+		fmt.Printf("signing JWT token: %s\n", err)
+		respondWithError(w, http.StatusInternalServerError, "Internal Error")
+		return
+	}
+
+	resp := PostRefreshResponse{
+		Token: accessTokStr,
+	}
+	respondWithJSON(w, http.StatusOK, resp)
+}
+
+func (cfg *apiConfig) handlePostRevoke(w http.ResponseWriter, req *http.Request) {
+	token, err := validateJWT(w, req, cfg.jwtSecret)
+	if err != nil {
+		return
+	}
+
+	if iss, err := token.Claims.GetIssuer(); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Token Missing Issuer")
+		return
+	} else if iss != gRefreshTokIssuer {
+		fmt.Printf("request refresh: wrong issuer %s\n", iss)
+		respondWithError(w, http.StatusUnauthorized, "Wrong Issuer")
+		return
+	}
+
+	auth := req.Header.Get("Authorization")
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		respondWithError(w, http.StatusBadRequest, `Malformed "Authorization" in Header`)
+		return
+	}
+	tokStr := strings.TrimPrefix(auth, prefix)
+
+	err = cfg.db.AddTokenRevocation(tokStr)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Database Error")
+	}
+
+	respondWithJSON(w, http.StatusOK, struct{}{})
+}
+
 func chirpCtx(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		chirpIDStr := chi.URLParam(req, "chirpID")
@@ -422,6 +504,8 @@ func apiRouter(cfg *apiConfig) chi.Router {
 		r.Post("/", cfg.handlePostUsers)
 		r.Put("/", cfg.handlePutUserById)
 	})
+	router.Post("/refresh", cfg.handlePostRefresh)
+	router.Post("/revoke", cfg.handlePostRevoke)
 
 	return router
 }
@@ -516,4 +600,40 @@ func emptyPath(next http.Handler) http.Handler {
 	return &rootPath{
 		next: next,
 	}
+}
+
+// validates the autheticity of a JWT token. If an error occured, w will already be written to and should not be used further
+//
+// TODO: having w "sometimes" being written to is kinda confusing, should change that
+func validateJWT(w http.ResponseWriter, req *http.Request, secret []byte) (*jwt.Token, error) {
+	// header format:
+	//	  Authorization: Bearer <token>
+	auth := req.Header.Get("Authorization")
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		respondWithError(w, http.StatusBadRequest, `Malformed "Authorization" in Header`)
+		return nil, ErrBadAuthHeader
+	}
+	tokStr := strings.TrimPrefix(auth, prefix)
+	claims := jwt.RegisteredClaims{}
+
+	token, err := jwt.ParseWithClaims(tokStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if err != nil {
+		if err == jwt.ErrSignatureInvalid {
+			respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+			return nil, ErrUnauthorizedToken
+		}
+		respondWithError(w, http.StatusBadRequest, "Bad Request")
+		return nil, fmt.Errorf("parsing JWT token: %w\n", err)
+	}
+
+	if !token.Valid {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return nil, ErrUnauthorizedToken
+	}
+
+	return token, nil
 }
