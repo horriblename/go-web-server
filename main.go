@@ -295,28 +295,67 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 
 func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, req *http.Request) {
 	chirpID := req.Context().Value("chirpID")
-
-	chirps, err := cfg.db.GetChirps()
-	if err != nil {
-		fmt.Printf("Getting chirps from DB: %s\n", err)
-		respBody := struct {
-			Error string `json:"error"`
-		}{
-			Error: "Database Error",
+	if chirpID, ok := chirpID.(int); ok {
+		chirp, err := cfg.db.GetChirp(chirpID)
+		if err == db.ErrChirpNotFound {
+			respondWithError(w, http.StatusNotFound, "Not Found")
+			return
+		} else if err != nil {
+			fmt.Printf("getting chirp with ID %d: %s\n", chirpID, err)
+			respondWithError(w, http.StatusInternalServerError, "Database Error")
+			return
 		}
-		respondWithJSON(w, http.StatusInternalServerError, respBody)
+
+		respondWithJSON(w, http.StatusOK, chirp)
 		return
 	}
 
-	// could be optimised but idc
-	for _, chirp := range chirps {
-		if chirp.Id == chirpID {
-			respondWithJSON(w, http.StatusOK, chirp)
-			return
-		}
+	respondWithError(w, http.StatusNotFound, "Not Found")
+}
+
+func (cfg *apiConfig) handleDeleteChirpByID(w http.ResponseWriter, req *http.Request) {
+	token, err := validateJWT(w, req, cfg.jwtSecret)
+	if err != nil {
+		return
 	}
 
-	respondWithError(w, http.StatusNotFound, "Chirp not found")
+	subject, err := token.Claims.GetSubject()
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Token Missing Subject")
+		return
+	}
+	userID, err := strconv.Atoi(subject)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Token Subject Not ID")
+		return
+	}
+
+	chirpID := req.Context().Value("chirpID")
+	if chirpID, ok := chirpID.(int); ok {
+		chirp, err := cfg.db.GetChirp(chirpID)
+		if err != nil {
+			if err == db.ErrChirpNotFound {
+				respondWithError(w, http.StatusNotFound, "Not Found")
+				return
+			}
+
+			fmt.Printf("getting chirp with ID %d: %s\n", chirpID, err)
+			respondWithError(w, http.StatusInternalServerError, "Database Error")
+			return
+		}
+
+		if chirp.AuthorID != userID {
+			respondWithError(w, 403, "Unauthorized")
+			return
+		}
+
+		cfg.db.DeleteChirp(chirpID)
+		respondWithJSON(w, http.StatusOK, struct{}{})
+		return
+	}
+
+	respondWithError(w, http.StatusNotFound, "Not Found")
+	return
 }
 
 // func (cfg *apiConfig) handleGetUsers(w http.ResponseWriter, req *http.Request) {
@@ -515,6 +554,7 @@ func apiRouter(cfg *apiConfig) chi.Router {
 		r.Get("/", cfg.handleGetChirps)
 		r.Post("/", cfg.handlePostChirp)
 		r.With(chirpCtx).Get("/{chirpID}", cfg.handleGetChirpByID)
+		r.With(chirpCtx).Delete("/{chirpID}", cfg.handleDeleteChirpByID)
 	})
 	router.Route("/users", func(r chi.Router) {
 		r.Post("/", cfg.handlePostUsers)

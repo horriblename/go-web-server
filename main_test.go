@@ -154,6 +154,14 @@ func TestServer(t *testing.T) {
 	assertOk(testHttpRequest("POST", header, revoke_url, empty_req, http.StatusOK, gNoCheck))
 	assertOk(testHttpRequest("POST", header, refresh_url, empty_req, http.StatusUnauthorized, gNoCheck))
 
+	// DELETE /api/chirps/{id}
+	header = newAuthenticatedHeader(accToken1)
+	assertOk(testHttpRequest("DELETE", header, chirps_url+"/1", struct{}{}, http.StatusOK, gNoCheck))
+
+	header = newAuthenticatedHeader(accToken1)
+	assertOk(testHttpRequest("DELETE", header, chirps_url+"/1", struct{}{}, http.StatusNotFound, gNoCheck))
+	header = newAuthenticatedHeader(accToken1)
+	assertOk(testHttpRequest("DELETE", header, chirps_url+"/2", struct{}{}, 403, gNoCheck))
 }
 
 func testHttpRequestString(method string, headers map[string]string, url string, req any, code int, expect string) error {

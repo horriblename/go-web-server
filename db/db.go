@@ -47,6 +47,7 @@ var (
 	ErrWrongPassword     = bcrypt.ErrMismatchedHashAndPassword
 	ErrInvalidUserID     = errors.New("user ID not found in database")
 	ErrTokenRevoked      = errors.New("token is revoked")
+	ErrChirpNotFound     = errors.New("requested chirp not found")
 )
 
 // NewDB creates a new database connection
@@ -115,6 +116,23 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	sort.Slice(chirps, func(i, j int) bool { return chirps[i].Id < chirps[j].Id })
 
 	return chirps, nil
+}
+
+// Finds and returns a chirp by id. Returns an ErrChirpNotFound if the id does not exist,
+// any other error is a databse error.
+func (db *DB) GetChirp(id int) (*Chirp, error) {
+	dbStruct, err := db.loadDB()
+
+	if err != nil {
+		return nil, err
+	}
+
+	chirp, ok := dbStruct.Chirps[id]
+	if !ok {
+		return nil, ErrChirpNotFound
+	}
+
+	return &chirp, nil
 }
 
 func (db *DB) GetUsers() ([]UserDTO, error) {
@@ -187,6 +205,23 @@ func (db *DB) CreateUser(email, password string) (UserDTO, error) {
 	err = db.writeDB(dbstruct)
 
 	return NewUserDTO(newUser), err
+}
+
+// Deletes a chirp entry by id. Returns ErrChirpNotFound if it doesn't exist.
+func (db *DB) DeleteChirp(id int) error {
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	if _, ok := dbStruct.Chirps[id]; !ok {
+		return ErrChirpNotFound
+	}
+
+	delete(dbStruct.Chirps, id)
+	db.writeDB(dbStruct)
+
+	return nil
 }
 
 func (db *DB) UpdateUser(id int, new_email, new_password string) (*UserDTO, error) {
