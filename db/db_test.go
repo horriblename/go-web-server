@@ -76,6 +76,22 @@ func TestDB(t *testing.T) {
 	}
 
 	assertOk(db.CheckTokenRevocation("not_revoked"))
+
+	// upgrade user to Chirpy Red
+	assertOk(db.UpgradeUser(1))
+	if users, err := db.GetUsers(); err != nil {
+		t.Errorf("getting users: %s", err)
+	} else if users[0].Id != 1 {
+		panic(fmt.Sprintf("reading wrong user data: %d", users[0].Id))
+	} else if !users[0].IsChirpyRed {
+		t.Errorf("expected user.is_chirpy_red to be true, got false")
+	}
+
+	// upgrading non-existent user
+	err = db.UpgradeUser(100)
+	if err != ErrUserNotFound {
+		t.Errorf(`Expected error to be %s, got %s`, ErrUserNotFound, err)
+	}
 }
 
 func testAddChirp(db *DB, content string, authorID, expectID int) error {

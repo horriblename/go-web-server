@@ -21,12 +21,14 @@ type Chirp struct {
 type User struct {
 	Id             int    `json:"id"`
 	Email          string `json:"email"`
+	IsChirpyRed    bool   `json:"is_chirpy_red"`
 	HashedPassword []byte `json:"hashed_password"`
 }
 
 type UserDTO struct {
-	Id    int    `json:"id"`
-	Email string `json:"email"`
+	Id          int    `json:"id"`
+	Email       string `json:"email"`
+	IsChirpyRed bool   `json:"is_chirpy_red"`
 }
 
 type DB struct {
@@ -48,6 +50,7 @@ var (
 	ErrInvalidUserID     = errors.New("user ID not found in database")
 	ErrTokenRevoked      = errors.New("token is revoked")
 	ErrChirpNotFound     = errors.New("requested chirp not found")
+	ErrUserNotFound      = errors.New("requested user not found")
 )
 
 // NewDB creates a new database connection
@@ -70,7 +73,7 @@ func NewDBStruct(chirps []Chirp, users []User) DBStruct {
 }
 
 func NewUserDTO(data User) UserDTO {
-	return UserDTO{data.Id, data.Email}
+	return UserDTO{data.Id, data.Email, data.IsChirpyRed}
 }
 
 // creates database file if it doesn't exist
@@ -205,6 +208,28 @@ func (db *DB) CreateUser(email, password string) (UserDTO, error) {
 	err = db.writeDB(dbstruct)
 
 	return NewUserDTO(newUser), err
+}
+
+// UpgradeUser marks a user as `IsChirpyRed`.
+//
+// if the given userID does not exist, return ErrUserNotFound. Any other
+// error is from loading/writing the database
+func (db *DB) UpgradeUser(userID int) error {
+	dbstruct, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	user, ok := dbstruct.Users[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+
+	user.IsChirpyRed = true
+	dbstruct.Users[userID] = user
+	db.writeDB(dbstruct)
+
+	return nil
 }
 
 // Deletes a chirp entry by id. Returns ErrChirpNotFound if it doesn't exist.

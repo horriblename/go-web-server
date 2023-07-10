@@ -27,6 +27,7 @@ const (
 	gRefreshTokenExpirationInSeconds = 60 * 24 * 60 * 60 // 60 days
 	gAccessTokIssuer                 = "chirpy-access"
 	gRefreshTokIssuer                = "chirpy-refresh"
+	gWebhookEventUserUpgraded        = "user.upgraded"
 )
 
 var (
@@ -59,6 +60,7 @@ type LoginSuccessResponse struct {
 	Email        string `json:"email"`
 	Token        string `json:"token"`
 	RefreshToken string `json:"refresh_token"`
+	IsChirpyRed  bool   `json:"is_chirpy_red"`
 }
 
 type PostRefreshParameters struct {
@@ -67,6 +69,13 @@ type PostRefreshParameters struct {
 
 type PostRefreshResponse struct {
 	Token string `json:"token"`
+}
+
+type PostPolkaWebhooksParameters struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserID int `json:"user_id"`
+	} `json:"data"`
 }
 
 var gProfanity []string = []string{"kerfuffle", "sharbert", "fornax"}
@@ -270,10 +279,11 @@ func (cfg *apiConfig) handlePostLogin(w http.ResponseWriter, req *http.Request) 
 	refreshTokStr, err := refreshToken.SignedString(cfg.jwtSecret)
 
 	resp := LoginSuccessResponse{
-		Id:           user.Id,
-		Email:        user.Email,
-		Token:        accessTokStr,
-		RefreshToken: refreshTokStr,
+		user.Id,
+		user.Email,
+		accessTokStr,
+		refreshTokStr,
+		user.IsChirpyRed,
 	}
 
 	respondWithJSON(w, http.StatusOK, resp)
@@ -532,6 +542,30 @@ func (cfg *apiConfig) handlePostRevoke(w http.ResponseWriter, req *http.Request)
 	respondWithJSON(w, http.StatusOK, struct{}{})
 }
 
+func (cfg *apiConfig) handlePostPolkaWebhooks(w http.ResponseWriter, req *http.Request) {
+	var params PostPolkaWebhooksParameters
+	decoder := json.NewDecoder(req.Body)
+	decoder.Decode(&params)
+
+	if params.Event == gWebhookEventUserUpgraded {
+		err := cfg.db.UpgradeUser(params.Data.UserID)
+
+		if err == db.ErrUserNotFound {
+			respondWithError(w, http.StatusNotFound, "")
+			return
+		} else if err != nil {
+			fmt.Printf("upgrading user: %s\n", err)
+			respondWithError(w, http.StatusInternalServerError, "Database Error")
+			return
+		}
+
+		respondWithError(w, http.StatusOK, "")
+		return
+	}
+
+	respondWithError(w, http.StatusOK, "")
+}
+
 func chirpCtx(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		chirpIDStr := chi.URLParam(req, "chirpID")
@@ -562,6 +596,7 @@ func apiRouter(cfg *apiConfig) chi.Router {
 	})
 	router.Post("/refresh", cfg.handlePostRefresh)
 	router.Post("/revoke", cfg.handlePostRevoke)
+	router.Post("/polka/webhooks", cfg.handlePostPolkaWebhooks)
 
 	return router
 }

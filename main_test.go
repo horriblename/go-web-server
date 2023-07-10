@@ -120,17 +120,19 @@ func TestServer(t *testing.T) {
 	assertOk(testHttpRequest("GET", nil, url+"/api/chirps/100", nil, http.StatusNotFound, gNoCheck))
 
 	header = newAuthenticatedHeader(accToken1)
+	pw1 = "043234"
 	req_put_users := PostUserRequest{
 		Email:    email1,
-		Password: "043234",
+		Password: pw1,
 	}
 	// PUT /api/users: change password
 	_, err = testHttpWithResponse[LoginSuccessResponse]("PUT", header, users_url, req_put_users, 200)
 	assertOk(err)
 
 	header = newAuthenticatedHeader(accToken2)
+	email2 = "new@email.com"
 	req_put_users = PostUserRequest{
-		Email:    "new@email.com",
+		Email:    email2,
 		Password: pw2,
 	}
 	// PUT /api/users: change email
@@ -162,6 +164,31 @@ func TestServer(t *testing.T) {
 	assertOk(testHttpRequest("DELETE", header, chirps_url+"/1", struct{}{}, http.StatusNotFound, gNoCheck))
 	header = newAuthenticatedHeader(accToken1)
 	assertOk(testHttpRequest("DELETE", header, chirps_url+"/2", struct{}{}, 403, gNoCheck))
+
+	polka_webhooks_url := url + "/api/polka/webhooks"
+	webhook_req := PostPolkaWebhooksParameters{
+		Event: "user.upgraded",
+		Data: struct {
+			UserID int `json:"user_id"`
+		}{2},
+	}
+	req_login = PostUserRequest{email2, pw2}
+	// POST /api/polka/webhooks
+	assertOk(testHttpRequest("POST", nil, polka_webhooks_url, webhook_req, 200, gNoCheck))
+	resp, err := testHttpWithResponse[LoginSuccessResponse]("POST", nil, login_url, req_login, 200)
+	assertOk(err)
+	if !resp.IsChirpyRed {
+		t.Errorf("expected user to have chirpy red")
+	}
+
+	webhook_req = PostPolkaWebhooksParameters{
+		Event: "user.upgraded",
+		Data: struct {
+			UserID int `json:"user_id"`
+		}{100},
+	}
+	// POST /api/polka/webhooks send non-existent user id
+	assertOk(testHttpRequest("POST", nil, polka_webhooks_url, webhook_req, 404, gNoCheck))
 }
 
 func testHttpRequestString(method string, headers map[string]string, url string, req any, code int, expect string) error {
