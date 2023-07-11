@@ -39,6 +39,7 @@ type apiConfig struct {
 	fileserverHits int
 	db             *db.DB
 	jwtSecret      []byte
+	polkaApiKey    string
 }
 
 type serverConfig struct {
@@ -543,6 +544,15 @@ func (cfg *apiConfig) handlePostRevoke(w http.ResponseWriter, req *http.Request)
 }
 
 func (cfg *apiConfig) handlePostPolkaWebhooks(w http.ResponseWriter, req *http.Request) {
+	// header format:
+	//	  Authorization: ApiKey <key>
+	auth := req.Header.Get("Authorization")
+
+	if auth != "ApiKey "+cfg.polkaApiKey {
+		respondWithError(w, 401, "")
+		return
+	}
+
 	var params PostPolkaWebhooksParameters
 	decoder := json.NewDecoder(req.Body)
 	decoder.Decode(&params)
@@ -616,7 +626,7 @@ func handleReadinessCheck(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func startServer(serverCfg serverConfig, jwtSecret []byte) error {
+func startServer(serverCfg serverConfig, jwtSecret []byte, polkaApiKey string) error {
 	router := chi.NewRouter()
 
 	db, err := db.New(serverCfg.databasePath)
@@ -624,7 +634,7 @@ func startServer(serverCfg serverConfig, jwtSecret []byte) error {
 		panic(fmt.Sprintf("Creating DB: %s", err))
 	}
 
-	apiCfg := apiConfig{db: db, jwtSecret: jwtSecret}
+	apiCfg := apiConfig{0, db, jwtSecret, polkaApiKey}
 	fileServer := apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))
 
 	// if not using chi
@@ -666,8 +676,13 @@ func main() {
 		fmt.Printf("empty JWT_SECRET!\n")
 		os.Exit(1)
 	}
+	polkaApiKey := os.Getenv("POLKA_API_KEY")
+	if polkaApiKey == "" {
+		fmt.Printf("missing POLKA_API_KEY!\n")
+		os.Exit(1)
+	}
 
-	err := startServer(serverCfg, []byte(jwtSecret))
+	err := startServer(serverCfg, []byte(jwtSecret), polkaApiKey)
 
 	if err != http.ErrServerClosed {
 		fmt.Printf("%s\n", err)

@@ -39,8 +39,9 @@ func TestServer(t *testing.T) {
 
 	godotenv.Load()
 	jwtSecret := os.Getenv("JWT_SECRET")
+	polkaApiKey := os.Getenv("POLKA_API_KEY")
 	go func() {
-		serverErr <- startServer(serverCfg, []byte(jwtSecret))
+		serverErr <- startServer(serverCfg, []byte(jwtSecret), polkaApiKey)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -166,6 +167,9 @@ func TestServer(t *testing.T) {
 	assertOk(testHttpRequest("DELETE", header, chirps_url+"/2", struct{}{}, 403, gNoCheck))
 
 	polka_webhooks_url := url + "/api/polka/webhooks"
+	header = map[string]string{
+		"Authorization": "ApiKey " + polkaApiKey,
+	}
 	webhook_req := PostPolkaWebhooksParameters{
 		Event: "user.upgraded",
 		Data: struct {
@@ -173,9 +177,11 @@ func TestServer(t *testing.T) {
 		}{2},
 	}
 	req_login = PostUserRequest{email2, pw2}
+	// POST /api/polka/webhooks without API key in header
+	assertOk(testHttpRequest("POST", nil, polka_webhooks_url, webhook_req, 401, gNoCheck))
 	// POST /api/polka/webhooks
-	assertOk(testHttpRequest("POST", nil, polka_webhooks_url, webhook_req, 200, gNoCheck))
-	resp, err := testHttpWithResponse[LoginSuccessResponse]("POST", nil, login_url, req_login, 200)
+	assertOk(testHttpRequest("POST", header, polka_webhooks_url, webhook_req, 200, gNoCheck))
+	resp, err := testHttpWithResponse[LoginSuccessResponse]("POST", header, login_url, req_login, 200)
 	assertOk(err)
 	if !resp.IsChirpyRed {
 		t.Errorf("expected user to have chirpy red")
@@ -188,7 +194,7 @@ func TestServer(t *testing.T) {
 		}{100},
 	}
 	// POST /api/polka/webhooks send non-existent user id
-	assertOk(testHttpRequest("POST", nil, polka_webhooks_url, webhook_req, 404, gNoCheck))
+	assertOk(testHttpRequest("POST", header, polka_webhooks_url, webhook_req, 404, gNoCheck))
 }
 
 func testHttpRequestString(method string, headers map[string]string, url string, req any, code int, expect string) error {
