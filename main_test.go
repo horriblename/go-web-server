@@ -195,6 +195,29 @@ func TestServer(t *testing.T) {
 	}
 	// POST /api/polka/webhooks send non-existent user id
 	assertOk(testHttpRequest("POST", header, polka_webhooks_url, webhook_req, 404, gNoCheck))
+
+	header = newAuthenticatedHeader(accToken1)
+	req_post_chirp = PostChirpRequest{"chirp user 1 a"}
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 201, gNoCheck))
+	req_post_chirp = PostChirpRequest{"chirp user 1 b"}
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 201, gNoCheck))
+	header = newAuthenticatedHeader(accToken2)
+	req_post_chirp = PostChirpRequest{"chirp user 2 a"}
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 201, gNoCheck))
+	req_post_chirp = PostChirpRequest{"chirp user 2 b"}
+	assertOk(testHttpRequest("POST", header, chirps_url, req_post_chirp, 201, gNoCheck))
+	// GET /api/chirps?author_id=1
+	chirps, err := testHttpWithResponse[[]db.Chirp]("GET", nil, chirps_url+"?author_id=1", struct{}{}, 200)
+	assertOk(err)
+	expectLen := 2
+	if len(*chirps) != expectLen {
+		t.Fatalf("Expected %d chirps, got %d", expectLen, len(*chirps))
+	}
+	for _, chirp := range *chirps {
+		if chirp.AuthorID != 1 {
+			t.Errorf("Expected all chirps to be authored by user 1, got %+v", *chirps)
+		}
+	}
 }
 
 func testHttpRequestString(method string, headers map[string]string, url string, req any, code int, expect string) error {

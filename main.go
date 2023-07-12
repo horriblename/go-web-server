@@ -301,6 +301,13 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
+	authorIDStr := req.URL.Query().Get("author_id")
+	if authorID, err := strconv.Atoi(authorIDStr); err == nil {
+		chirps = filter(func(chirp db.Chirp) bool { return chirp.AuthorID == authorID }, chirps)
+		respondWithJSON(w, http.StatusOK, chirps)
+		return
+	}
+
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
@@ -742,4 +749,16 @@ func validateJWT(w http.ResponseWriter, req *http.Request, secret []byte) (*jwt.
 	}
 
 	return token, nil
+}
+
+// deletes elements that don't fulfill `pred(element)`.
+func filter[T any](pred func(T) bool, elements []T) []T {
+	filtered := make([]T, 0)
+	for _, el := range elements {
+		if pred(el) {
+			filtered = append(filtered, el)
+		}
+	}
+
+	return filtered
 }
