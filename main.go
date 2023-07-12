@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -304,8 +305,13 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 	authorIDStr := req.URL.Query().Get("author_id")
 	if authorID, err := strconv.Atoi(authorIDStr); err == nil {
 		chirps = filter(func(chirp db.Chirp) bool { return chirp.AuthorID == authorID }, chirps)
-		respondWithJSON(w, http.StatusOK, chirps)
-		return
+	}
+
+	sortMethod := req.URL.Query().Get("sort")
+	if sortMethod == "desc" {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].Id > chirps[j].Id })
+	} else {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].Id < chirps[j].Id })
 	}
 
 	respondWithJSON(w, http.StatusOK, chirps)

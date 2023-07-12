@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +218,20 @@ func TestServer(t *testing.T) {
 		if chirp.AuthorID != 1 {
 			t.Errorf("Expected all chirps to be authored by user 1, got %+v", *chirps)
 		}
+	}
+
+	// GET /api/chirps?sort=desc
+	chirps, err = testHttpWithResponse[[]db.Chirp]("GET", nil, chirps_url+"?sort=desc", struct{}{}, 200)
+	assertOk(err)
+	if !sort.SliceIsSorted(*chirps, func(i, j int) bool { return (*chirps)[i].Id > (*chirps)[j].Id }) {
+		t.Fatalf("chirps not sorted in descending order: %+v", chirps)
+	}
+
+	// GET /api/chirps default sort (ascending)
+	chirps, err = testHttpWithResponse[[]db.Chirp]("GET", nil, chirps_url, struct{}{}, 200)
+	assertOk(err)
+	if !sort.SliceIsSorted(*chirps, func(i, j int) bool { return (*chirps)[i].Id < (*chirps)[j].Id }) {
+		t.Fatalf("chirps not sorted in ascending order: %+v", chirps)
 	}
 }
 
