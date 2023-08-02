@@ -757,7 +757,6 @@ func validateJWT(w http.ResponseWriter, req *http.Request, secret []byte) (*jwt.
 	return token, nil
 }
 
-// deletes elements that don't fulfill `pred(element)`.
 func filter[T any](pred func(T) bool, elements []T) []T {
 	filtered := make([]T, 0)
 	for _, el := range elements {
