@@ -715,6 +715,7 @@ func (h *rootPath) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	h.next.ServeHTTP(w, req)
 }
 
+// Returns a handler which sets the request URL to "/"
 func emptyPath(next http.Handler) http.Handler {
 	return &rootPath{
 		next: next,
